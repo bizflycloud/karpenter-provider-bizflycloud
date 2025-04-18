@@ -1,6 +1,7 @@
 # Build stage
-FROM golang:1.21-alpine as builder
+FROM golang:1.23-alpine as builder
 
+ENV GOTOOLCHAIN=auto
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates make
 
