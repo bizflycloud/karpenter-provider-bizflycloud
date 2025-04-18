@@ -7,6 +7,8 @@
 *.dll
 *.so
 *.dylib
+bin/
+karpenter-provider-bizflycloud
 
 # Test binary, built with `go test -c`
 *.test
@@ -23,3 +25,16 @@ go.work.sum
 
 # env file
 .env
+
+# Mac files
+.DS_Store
+
+# IDE files
+.idea/
+.vscode/
+
+# Kubernetes config files (in case someone accidentally commits them)
+kubeconfig
+
+# Debug files
+__debug_bin
