@@ -1,0 +1,213 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: bizflycloudnodeclasses.karpenter.bizflycloud.com
+spec:
+  group: karpenter.bizflycloud.com
+  names:
+    categories:
+    - karpenter
+    kind: BizflyCloudNodeClass
+    listKind: BizflyCloudNodeClassList
+    plural: bizflycloudnodeclasses
+    shortNames:
+    - bizflycloudnc
+    - bizflycloudncs
+    singular: bizflycloudnodeclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    - jsonPath: .spec.role
+      name: Role
+      priority: 1
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass
+          API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              blockDevicesStorageID:
+                description: BlockDevicesStorageID is the storage ID to create/clone
+                  the VM
+                type: string
+              metadataOptions:
+                default:
+                  type: template
+                description: MetadataOptions for the generated launch template of
+                  provisioned nodes.
+                properties:
+                  type:
+                    type: string
+                required:
+                - type
+                type: object
+              placementStrategy:
+                description: |-
+                  PlacementStrategy defines how nodes should be placed across zones
+                  Only used when Zone or Subnet is not specified
+                properties:
+                  spread:
+                    properties:
+                      zones:
+                        items:
+                          type: string
+                        type: array
+                    type: object
+                type: object
+              region:
+                description: Region is the Proxmox Cloud region where nodes will be
+                  created
+                type: string
+              securityGroups:
+                description: SecurityGroups to apply to the VMs
+                items:
+                  properties:
+                    securityGroupID:
+                      type: string
+                  required:
+                  - securityGroupID
+                  type: object
+                maxItems: 10
+                type: array
+              tags:
+                description: Tags to apply to the VMs
+                items:
+                  type: string
+                type: array
+              template:
+                description: Template is the name of the template to use for nodes
+                type: string
+              zone:
+                description: |-
+                  Zone is the availability zone where nodes will be created
+                  If not specified, zones will be automatically selected based on placement strategy
+                type: string
+            required:
+            - template
+            type: object
+          status:
+            description: BizflyCloudNodeClassStatus defines the observed state of
+              BizflyCloudNodeClass
+            properties:
+              conditions:
+                description: Conditions represents the latest available observations
+                  of the BizflyCloudNodeClass's current state
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              instanceTypes:
+                description: InstanceTypes is the list of instance types discovered
+                  from BizFly Cloud
+                items:
+                  type: string
+                type: array
+              lastUpdated:
+                description: LastUpdated is the timestamp of the last update to the
+                  status
+                format: date-time
+                type: string
+              regions:
+                description: Regions is the list of available regions
+                items:
+                  type: string
+                type: array
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

@@ -1,0 +1,25 @@
+apiVersion: karpenter.sh/v1alpha5
+kind: Provisioner
+metadata:
+  name: default
+spec:
+  providerRef:
+    name: default
+    apiVersion: bizflycloud.karpenter.sh/v1alpha1
+    kind: ProviderConfig
+  
+  requirements:
+    - key: "node.kubernetes.io/instance-type"
+      operator: In
+      values: ["4c_8g", "8c_16g"]  # Replace with your desired instance types
+    
+    - key: "topology.kubernetes.io/zone" 
+      operator: In
+      values: ["HN1-a", "HN1-b"]  # Replace with zones matching your region
+  
+  limits:
+    resources:
+      cpu: 20
+      memory: 100Gi
+  
+  ttlSecondsAfterEmpty: 30 
