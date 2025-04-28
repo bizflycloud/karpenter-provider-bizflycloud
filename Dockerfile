@@ -22,7 +22,7 @@ COPY . .
 # Build with version information
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -ldflags "-X main.version=${VERSION} -X main.buildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ') -w -s" \
-    -a -o karpenter-provider-bizflycloud ./cmd/karpenter-provider-bizflycloud
+    -a -o karpenter-provider-bizflycloud ./cmd/controller
 
 # Runtime stage
 FROM alpine:3.18

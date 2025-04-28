@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
-IMG ?= cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:latest
+IMG ?= fevirtus/karpenter-provider-bizflycloud:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.28.0
+ENVTEST_K8S_VERSION = 1.24.2
 
 # Obtain the version using git describe, defaulting to 'dev' if git is not available
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
@@ -20,6 +20,25 @@ SHELL = /usr/bin/env bash -o pipefail
 
 # LDFLAGS for the build
 LDFLAGS = -ldflags "-X main.version=$(VERSION) -X main.buildDate=$(shell date -u +'%Y-%m-%dT%H:%M:%SZ')"
+
+MODULE := github.com/bizflycloud/karpenter-provider-bizflycloud
+APIS := ./pkg/apis/v1
+BOILERPLATE := ./hack/boilerplate.go.txt
+CRD_OUTPUT := ./config/crd
+CONTROLLER_GEN := $(shell which controller-gen)
+
+.PHONY: generate
+generate: deepcopy crd
+deepcopy:
+	@echo "🧬 Generating deepcopy methods..."
+	$(CONTROLLER_GEN) object:headerFile="$(BOILERPLATE)" paths="$(APIS)"
+crd:
+	@echo "📦 Generating CRDs..."
+	$(CONTROLLER_GEN) crd:crdVersions=v1 object:headerFile="$(BOILERPLATE)" paths="$(APIS)" output:crd:dir="$(CRD_OUTPUT)"
+clean:
+	@echo "🧹 Cleaning generated files..."
+	find $(APIS) -name "zz_generated.deepcopy.go" -delete
+	rm -rf $(CRD_OUTPUT)/*.yaml
 
 .PHONY: all
 all: build
@@ -84,11 +103,11 @@ run: fmt vet ## Run from your host.
 
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.
-	docker build --build-arg VERSION=$(VERSION) -t ${IMG} .
+	docker build --platform=linux/amd64 --build-arg VERSION=$(VERSION) -t ${IMG} .
 
 .PHONY: docker-build-dev
 docker-build-dev: ## Build docker image with a dev tag.
-	docker build --build-arg VERSION=$(VERSION) -t ${IMG} -t cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:dev .
+	docker build --build-arg VERSION=$(VERSION) -t ${IMG} -t fevirtus/karpenter-provider-bizflycloud:dev .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

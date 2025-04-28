@@ -1,68 +1,81 @@
 # Karpenter Provider for BizFly Cloud
 
-This project implements a Karpenter provider for BizFly Cloud, enabling Kubernetes auto-scaling capabilities on BizFly Cloud infrastructure.
-
-## Overview
-
-Karpenter is a Kubernetes node auto-scaling project that helps improve application availability and cluster efficiency. This provider extends Karpenter's capabilities to BizFly Cloud, allowing dynamic provisioning and termination of compute resources based on application demands.
+This provider enables [Karpenter](https://karpenter.sh) to provision nodes in BizFly Cloud.
 
 ## Prerequisites
 
 - Kubernetes cluster running on BizFly Cloud
-- Karpenter core installed in your cluster
-- BizFly Cloud API credentials
+- Karpenter v0.27.0 or later installed in your cluster
+- `kubectl` configured to access your cluster
+- BizFly Cloud account credentials
 
 ## Installation
 
-### Using Helm
+1. First, create the namespace if it doesn't exist:
 
 ```bash
-# Add the helm repository
-helm repo add karpenter-bizflycloud https://bizflycloud.github.io/karpenter-provider-bizflycloud
-
-# Install the chart
-helm install karpenter-provider-bizflycloud karpenter-bizflycloud/karpenter-provider-bizflycloud \
-  --namespace karpenter \
-  --create-namespace
+kubectl create namespace karpenter
 ```
 
-### Using kubectl
+2. Create the BizFly Cloud credentials secret:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/bizflycloud/karpenter-provider-bizflycloud/main/config/install.yaml
+# Edit config/samples/secret.yaml to add your credentials first
+kubectl apply -f config/samples/secret.yaml
+```
+
+3. Install the CRDs:
+
+```bash
+kubectl apply -f config/crd/
+```
+
+4. Deploy the provider:
+
+```bash
+kubectl apply -f config/deployment.yaml
+```
+
+5. Create the provider configuration:
+
+```bash
+# Edit config/samples/minimal-providerconfig.yaml to match your environment
+kubectl apply -f config/samples/minimal-providerconfig.yaml
+```
+
+6. Create a provisioner:
+
+```bash
+# Edit config/samples/minimal-provisioner.yaml to match your requirements
+kubectl apply -f config/samples/minimal-provisioner.yaml
 ```
 
 ## Configuration
 
-1. Create a secret with your BizFly Cloud credentials:
+### Provider Configuration
+
+The minimal provider configuration requires:
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: bizflycloud-credentials
-  namespace: karpenter
-type: Opaque
-stringData:
-  email: your-email@example.com
-  password: your-password
-```
-
-2. Create a BizflyCloudProviderConfig:
-
-```yaml
-apiVersion: karpenter.bizflycloud.vn/v1alpha1
+apiVersion: bizflycloud.karpenter.sh/v1alpha1
 kind: ProviderConfig
 metadata:
   name: default
 spec:
-  region: HN1
+  region: HN1  # Your BizFly Cloud region
   secretRef:
     name: bizflycloud-credentials
     namespace: karpenter
+  cloudConfig:
+    apiEndpoint: "https://manage.bizflycloud.vn/api"
+  imageConfig:
+    imageID: "ubuntu-20.04"
+    rootDiskSize: 20
 ```
 
-3. Create a Karpenter Provisioner with BizFly Cloud settings:
+### Provisioner Configuration
+
+A basic provisioner configuration looks like:
 
 ```yaml
 apiVersion: karpenter.sh/v1alpha5
@@ -72,34 +85,48 @@ metadata:
 spec:
   providerRef:
     name: default
-    apiVersion: karpenter.bizflycloud.vn/v1alpha1
+    apiVersion: bizflycloud.karpenter.sh/v1alpha1
     kind: ProviderConfig
+  
   requirements:
     - key: "node.kubernetes.io/instance-type"
       operator: In
-      values: ["4c_8g", "4c_8g_enterprise"]
+      values: ["4c_8g", "8c_16g"]
+    
     - key: "topology.kubernetes.io/zone"
       operator: In
-      values: ["HN1", "HN2"]
+      values: ["HN1-a", "HN1-b"]
+  
   limits:
     resources:
-      cpu: 100
+      cpu: 20
       memory: 100Gi
+  
   ttlSecondsAfterEmpty: 30
 ```
 
-## Development
+## Verification
 
-### Building from Source
+To verify the installation:
 
+1. Check the provider deployment:
 ```bash
-# Build binary
-make build
-
-# Build and push Docker image
-make docker-build docker-push IMG=your-registry/karpenter-provider-bizflycloud:tag
+kubectl get pods -n karpenter
 ```
 
-## License
+2. Check the provider configuration:
+```bash
+kubectl get providerconfig
+```
 
-Apache 2.0 License
+3. Check the provisioner:
+```bash
+kubectl get provisioner
+```
+
+## Troubleshooting
+
+Check the provider logs:
+```bash
+kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter-provider-bizflycloud
+```
