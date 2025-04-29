@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karpenter
+  namespace: karpenter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: karpenter
+  template:
+    metadata:
+      labels:
+        app: karpenter
+    spec:
+      serviceAccountName: karpenter
+      containers:
+      - name: karpenter
+        image: fevirtus/karpenter-provider-bizflycloud:latest
+        env:
+        - name: KARPENTER_CLOUD_PROVIDER
+          value: bizflycloud
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG
+          value: default
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_NAMESPACE
+          value: karpenter
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_NAME
+          value: default
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_API_VERSION
+          value: bizflycloud.karpenter.sh/v1alpha1
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_KIND
+          value: ProviderConfig
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_REGION
+          value: HN1
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAME
+          value: bizflycloud-credentials
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAMESPACE
+          value: karpenter
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_CLOUD_CONFIG_API_ENDPOINT
+          value: https://manage.bizflycloud.vn/api
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_IMAGE_CONFIG_IMAGE_ID
+          value: ubuntu-20.04
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_IMAGE_CONFIG_ROOT_DISK_SIZE
+          value: "20"

@@ -1,0 +1,20 @@
+apiVersion: karpenter.bizflycloud.com/v1
+kind: BizflyCloudNodeClass
+metadata:
+  name: default
+spec:
+  region: HN1
+  zone: HN1-a
+  template: ubuntu-20.04
+  blockDevicesStorageID: "your-storage-id"
+  placementStrategy:
+    spread:
+      zones:
+        - HN1-a
+        - HN1-b
+  tags:
+    - "karpenter-managed=true"
+  metadataOptions:
+    type: template
+  securityGroups:
+    - securityGroupID: "your-security-group-id"

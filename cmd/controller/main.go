@@ -9,7 +9,6 @@ import (
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/metrics"
 	"sigs.k8s.io/karpenter/pkg/controllers"
-	corecontrollers "sigs.k8s.io/karpenter/pkg/controllers"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
 	coreoperator "sigs.k8s.io/karpenter/pkg/operator"
 )
@@ -46,15 +45,6 @@ func main() {
 	clusterState := state.NewCluster(op.Clock, op.GetClient(), cloudProvider)
 
 	op.
-		WithControllers(ctx, corecontrollers.NewControllers(
-			ctx,
-			op.Manager,
-			op.Clock,
-			op.GetClient(),
-			op.EventRecorder,
-			cloudProvider,
-			clusterState,
-		)...).
 		WithControllers(ctx, controllers.NewControllers(
 			ctx,
 			op.Manager,

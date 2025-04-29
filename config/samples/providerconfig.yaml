@@ -73,7 +73,7 @@ stringData:
   email: "your-email@example.com"
   password: "your-password"
 ---
-apiVersion: karpenter.sh/v1alpha5
+apiVersion: karpenter.sh/v1
 kind: Provisioner
 metadata:
   name: default

@@ -82,12 +82,18 @@ var (
 )
 
 func init() {
-	// Register metrics with the global prometheus registry
-	metrics.Registry.MustRegister(
+	// Create a new registry for provider-specific metrics
+	providerRegistry := prometheus.NewRegistry()
+
+	// Register metrics with the provider registry
+	providerRegistry.MustRegister(
 		instanceCreationDuration,
 		instanceDeletionDuration,
 		apiErrors,
 	)
+
+	// Register the provider registry with the global registry
+	metrics.Registry.MustRegister(providerRegistry)
 }
 
 // CloudProvider implements the CloudProvider interface for BizFly Cloud
@@ -244,105 +250,105 @@ func (p *CloudProvider) GetOptions() *v1.NodePoolSpec {
 	return &v1.NodePoolSpec{}
 }
 
-// getProviderConfig retrieves the ProviderConfig CRD
-func (p *CloudProvider) getProviderConfig(ctx context.Context) (*v1bizfly.ProviderConfig, error) {
-	// Get the provider config
-	config := &v1bizfly.ProviderConfig{}
-	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: ProviderConfigName}, config); err != nil {
-		return nil, fmt.Errorf("failed to get ProviderConfig %q: %w", ProviderConfigName, err)
-	}
+// // getProviderConfig retrieves the ProviderConfig CRD
+// func (p *CloudProvider) getProviderConfig(ctx context.Context) (*v1bizfly.ProviderConfig, error) {
+// 	// Get the provider config
+// 	config := &v1bizfly.ProviderConfig{}
+// 	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: ProviderConfigName}, config); err != nil {
+// 		return nil, fmt.Errorf("failed to get ProviderConfig %q: %w", ProviderConfigName, err)
+// 	}
 
-	// Ensure default values are set if not specified
-	if config.Spec.Tagging == nil {
-		config.Spec.Tagging = &v1bizfly.TaggingSpec{
-			EnableResourceTags: true,
-			TagPrefix:          "karpenter.bizflycloud.sh/",
-		}
-	}
+// 	// Ensure default values are set if not specified
+// 	if config.Spec.Tagging == nil {
+// 		config.Spec.Tagging = &v1bizfly.TaggingSpec{
+// 			EnableResourceTags: true,
+// 			TagPrefix:          "karpenter.bizflycloud.sh/",
+// 		}
+// 	}
 
-	if config.Spec.CloudConfig == nil {
-		config.Spec.CloudConfig = &v1bizfly.CloudConfigSpec{
-			APIEndpoint:       "https://manage.bizflycloud.vn/api",
-			RetryMaxAttempts:  5,
-			RetryInitialDelay: "1s",
-			Timeout:           "30s",
-		}
-	}
+// 	if config.Spec.CloudConfig == nil {
+// 		config.Spec.CloudConfig = &v1bizfly.CloudConfigSpec{
+// 			APIEndpoint:       "https://manage.bizflycloud.vn/api",
+// 			RetryMaxAttempts:  5,
+// 			RetryInitialDelay: "1s",
+// 			Timeout:           "30s",
+// 		}
+// 	}
 
-	if config.Spec.ImageConfig == nil {
-		config.Spec.ImageConfig = &v1bizfly.ImageConfigSpec{
-			ImageID:      "ubuntu-20.04",
-			RootDiskSize: 20,
-		}
-	}
+// 	if config.Spec.ImageConfig == nil {
+// 		config.Spec.ImageConfig = &v1bizfly.ImageConfigSpec{
+// 			ImageID:      "ubuntu-20.04",
+// 			RootDiskSize: 20,
+// 		}
+// 	}
 
-	if config.Spec.DriftDetection == nil {
-		config.Spec.DriftDetection = &v1bizfly.DriftDetectionSpec{
-			Enabled:           true,
-			ReconcileInterval: "5m",
-			AutoRemediate:     true,
-		}
-	}
+// 	if config.Spec.DriftDetection == nil {
+// 		config.Spec.DriftDetection = &v1bizfly.DriftDetectionSpec{
+// 			Enabled:           true,
+// 			ReconcileInterval: "5m",
+// 			AutoRemediate:     true,
+// 		}
+// 	}
 
-	return config, nil
-}
+// 	return config, nil
+// }
 
-// getBizFlyClient creates a new BizFly Cloud client
-func (p *CloudProvider) getBizFlyClient(ctx context.Context) (*gobizfly.Client, error) {
-	// Get the secret containing the credentials
-	secret := &corev1.Secret{}
-	if err := p.kubeClient.Get(ctx, types.NamespacedName{
-		Name:      p.config.Spec.SecretRef.Name,
-		Namespace: p.config.Spec.SecretRef.Namespace,
-	}, secret); err != nil {
-		return nil, fmt.Errorf("failed to get credentials secret %q: %w",
-			p.config.Spec.SecretRef.Name, err)
-	}
+// // getBizFlyClient creates a new BizFly Cloud client
+// func (p *CloudProvider) getBizFlyClient(ctx context.Context) (*gobizfly.Client, error) {
+// 	// Get the secret containing the credentials
+// 	secret := &corev1.Secret{}
+// 	if err := p.kubeClient.Get(ctx, types.NamespacedName{
+// 		Name:      p.config.Spec.SecretRef.Name,
+// 		Namespace: p.config.Spec.SecretRef.Namespace,
+// 	}, secret); err != nil {
+// 		return nil, fmt.Errorf("failed to get credentials secret %q: %w",
+// 			p.config.Spec.SecretRef.Name, err)
+// 	}
 
-	// Get the credentials from the secret
-	email, ok := secret.Data["email"]
-	if !ok {
-		return nil, fmt.Errorf("email not found in secret %q", p.config.Spec.SecretRef.Name)
-	}
-	password, ok := secret.Data["password"]
-	if !ok {
-		return nil, fmt.Errorf("password not found in secret %q", p.config.Spec.SecretRef.Name)
-	}
+// 	// Get the credentials from the secret
+// 	email, ok := secret.Data["email"]
+// 	if !ok {
+// 		return nil, fmt.Errorf("email not found in secret %q", p.config.Spec.SecretRef.Name)
+// 	}
+// 	password, ok := secret.Data["password"]
+// 	if !ok {
+// 		return nil, fmt.Errorf("password not found in secret %q", p.config.Spec.SecretRef.Name)
+// 	}
 
-	// Get API endpoint from config
-	apiEndpoint := p.config.Spec.CloudConfig.APIEndpoint
+// 	// Get API endpoint from config
+// 	apiEndpoint := p.config.Spec.CloudConfig.APIEndpoint
 
-	// Create a new BizFly Cloud client
-	p.log.Info("Creating BizFly Cloud client", "endpoint", apiEndpoint)
-	client, err := gobizfly.NewClient(
-		gobizfly.WithAPIURL(apiEndpoint),
-		gobizfly.WithProjectID(p.config.Spec.SecretRef.Name),
-		gobizfly.WithRegionName(p.config.Spec.Region),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create BizFly Cloud client: %w", err)
-	}
+// 	// Create a new BizFly Cloud client
+// 	p.log.Info("Creating BizFly Cloud client", "endpoint", apiEndpoint)
+// 	client, err := gobizfly.NewClient(
+// 		gobizfly.WithAPIURL(apiEndpoint),
+// 		gobizfly.WithProjectID(p.config.Spec.SecretRef.Name),
+// 		gobizfly.WithRegionName(p.config.Spec.Region),
+// 	)
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create BizFly Cloud client: %w", err)
+// 	}
 
-	// Authenticate with BizFly Cloud
-	p.log.Info("Authenticating with BizFly Cloud")
-	token, err := client.Token.Init(
-		ctx,
-		&gobizfly.TokenCreateRequest{
-			AuthMethod:    "password",
-			Username:      string(email),
-			Password:      string(password),
-			AppCredID:     "",
-			AppCredSecret: "",
-		})
-	if err != nil {
-		return nil, fmt.Errorf("cannot create token: %s", err)
-	}
+// 	// Authenticate with BizFly Cloud
+// 	p.log.Info("Authenticating with BizFly Cloud")
+// 	token, err := client.Token.Init(
+// 		ctx,
+// 		&gobizfly.TokenCreateRequest{
+// 			AuthMethod:    "password",
+// 			Username:      string(email),
+// 			Password:      string(password),
+// 			AppCredID:     "",
+// 			AppCredSecret: "",
+// 		})
+// 	if err != nil {
+// 		return nil, fmt.Errorf("cannot create token: %s", err)
+// 	}
 
-	client.SetKeystoneToken(token)
+// 	client.SetKeystoneToken(token)
 
-	p.log.Info("Successfully authenticated with BizFly Cloud")
-	return client, nil
-}
+// 	p.log.Info("Successfully authenticated with BizFly Cloud")
+// 	return client, nil
+// }
 
 // CreateNode creates a new BizFly Cloud server instance
 func (p *CloudProvider) CreateNode(ctx context.Context, nodeSpec *corev1.Node) (*corev1.Node, error) {
