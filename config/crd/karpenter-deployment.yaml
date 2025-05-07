@@ -8,10 +8,14 @@ spec:
   selector:
     matchLabels:
       app: karpenter
+      app.kubernetes.io/instance: karpenter
+      app.kubernetes.io/name: karpenter
   template:
     metadata:
       labels:
         app: karpenter
+        app.kubernetes.io/instance: karpenter
+        app.kubernetes.io/name: karpenter
     spec:
       serviceAccountName: karpenter
       containers:
@@ -27,7 +31,7 @@ spec:
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_NAME
           value: default
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_API_VERSION
-          value: bizflycloud.karpenter.sh/v1alpha1
+          value: karpenter.bizflycloud.com/v1
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_KIND
           value: ProviderConfig
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_REGION
@@ -42,3 +46,44 @@ spec:
           value: ubuntu-20.04
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_IMAGE_CONFIG_ROOT_DISK_SIZE
           value: "20"
+        # Bizfly Cloud authentication environment variables
+        - name: BIZFLY_CLOUD_AUTH_METHOD
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: auth-method
+        - name: BIZFLY_CLOUD_EMAIL
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: email
+        - name: BIZFLY_CLOUD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: password
+        - name: BIZFLY_CLOUD_APP_CRED_ID
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: app-cred-id
+        - name: BIZFLY_CLOUD_APP_CRED_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: app-cred-secret
+        - name: BIZFLY_CLOUD_REGION
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: region
+        - name: BIZFLY_CLOUD_API_URL
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: api-url
+        - name: BIZFLY_CLOUD_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              name: bizflycloud-credentials
+              key: tenant-id

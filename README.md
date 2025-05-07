@@ -57,7 +57,7 @@ kubectl apply -f config/samples/minimal-provisioner.yaml
 The minimal provider configuration requires:
 
 ```yaml
-apiVersion: bizflycloud.karpenter.sh/v1alpha1
+apiVersion: bizflycloud.karpenter.sh/v1
 kind: ProviderConfig
 metadata:
   name: default
@@ -78,14 +78,14 @@ spec:
 A basic provisioner configuration looks like:
 
 ```yaml
-apiVersion: karpenter.sh/v1alpha5
+apiVersion: karpenter.sh/v1
 kind: Provisioner
 metadata:
   name: default
 spec:
   providerRef:
     name: default
-    apiVersion: bizflycloud.karpenter.sh/v1alpha1
+    apiVersion: bizflycloud.karpenter.sh/v1
     kind: ProviderConfig
   
   requirements:

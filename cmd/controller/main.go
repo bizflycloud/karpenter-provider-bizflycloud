@@ -1,12 +1,8 @@
 package main
 
 import (
-	"os"
-
-	"github.com/bizflycloud/gobizfly"
-	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/bizflycloud"
-	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype"
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/operator"
 	"sigs.k8s.io/karpenter/pkg/cloudprovider/metrics"
 	"sigs.k8s.io/karpenter/pkg/controllers"
 	"sigs.k8s.io/karpenter/pkg/controllers/state"
@@ -14,31 +10,15 @@ import (
 )
 
 func main() {
-	ctx, op := coreoperator.NewOperator()
-	log := op.GetLogger()
-	log.Info("Karpenter BizFly Cloud Provider version", "version", coreoperator.Version)
-	config := v1.ProviderConfig{}
+	ctx, op := operator.NewOperator(coreoperator.NewOperator())
 
-	bizflyClient, err := gobizfly.NewClient()
-	if err != nil {
-		log.Error(err, "failed creating BizFly Cloud client")
-		os.Exit(1)
-	}
-
-	instanceTypeProvider := instancetype.NewDefaultProvider(*bizflyClient)
-
-	cloudcapacityProvider, err := bizflycloud.New(
-		instanceTypeProvider,
+	cloudcapacityProvider := bizflycloud.New(
+		op.InstanceProvider,
 		op.GetClient(),
-		bizflyClient,
-		log,
-		&config,
+		op.Client,
+		*op.Log,
+		op.Config,
 	)
-	if err != nil {
-		log.Error(err, "failed creating instance provider")
-
-		os.Exit(1)
-	}
 
 	// Use the provider directly as the cloud provider
 	cloudProvider := metrics.Decorate(cloudcapacityProvider)

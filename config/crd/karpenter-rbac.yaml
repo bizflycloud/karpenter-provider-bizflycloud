@@ -30,7 +30,7 @@ rules:
 - apiGroups: ["karpenter.sh"]
   resources: ["nodepools", "nodepools/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-- apiGroups: ["bizflycloud.karpenter.sh"]
+- apiGroups: ["karpenter.bizflycloud.com"]
   resources: ["providerconfigs", "providerconfigs/status"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["karpenter.bizflycloud.com"]

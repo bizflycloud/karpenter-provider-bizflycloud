@@ -1,0 +1,45 @@
+apiVersion: karpenter.bizflycloud.com/v1
+kind: BizflyCloudNodeClass
+metadata:
+  name: default
+spec:
+  region: HN
+  zone: HN2
+  template: "Ubuntu 20.04.4 LTS"
+  blockDevicesStorageID: "7088dce3-09bd-4e1d-9dbb-0d2fecf4dffa"
+  # placementStrategy:
+  #   spread:
+  #     zones:
+  #       - HN1
+  # tags:
+  #   - "karpenter-managed=true"
+  metadataOptions:
+    type: template
+  # securityGroups:
+  #   - securityGroupID: "default-security-group"
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  # disruption:
+  #   consolidationPolicy: WhenEmpty
+  #   consolidateAfter: 30s
+  template:
+    spec:
+      requirements:
+        # - key: "node.kubernetes.io/instance-type"
+        #   operator: In
+        #   values: ["4c_8g", "8c_16g", "16c_32g"]
+        - key: "topology.kubernetes.io/zone"
+          operator: In
+          values: ["HN1", "HN2"]
+        # - key: "karpenter.bizflycloud.sh/image-id"
+        #   operator: In
+        #   values: ["ubuntu-20.04"]
+      nodeClassRef:
+        name: default
+        kind: BizflyCloudNodeClass
+        group: karpenter.bizflycloud.com
+
