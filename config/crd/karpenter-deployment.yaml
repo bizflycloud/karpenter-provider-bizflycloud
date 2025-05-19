@@ -35,7 +35,7 @@ spec:
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_KIND
           value: ProviderConfig
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_REGION
-          value: HN1
+          value: HN2
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAME
           value: bizflycloud-credentials
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAMESPACE

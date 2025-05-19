@@ -134,30 +134,38 @@ func (p *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *v1.NodeP
 	nodeClass, err := p.resolveNodeClassFromNodePool(ctx, nodePool)
 	if err != nil {
 		if errors.IsNotFound(err) {
+			fmt.Printf("[ERROR] NodeClass not found for NodePool %s: %v\n", nodePool.Name, err)
 			// If we can't resolve the NodeClass, then it's impossible for us to resolve the instance types
 			// p.recorder.Publish(cloudproviderevents.NodePoolFailedToResolveNodeClass(nodePool))
 			return nil, nil
 		}
 		return nil, fmt.Errorf("resolving node class, %w", err)
 	}
+
 	// TODO, break this coupling
 	instanceTypes, err := p.instanceTypeProvider.List(ctx, nodeClass)
 	if err != nil {
+		fmt.Printf("[ERROR] Failed to list instance types: %v\n", err)
 		return nil, err
 	}
+
 	return instanceTypes, nil
 }
 
 func (p *CloudProvider) resolveNodeClassFromNodePool(ctx context.Context, nodePool *v1.NodePool) (*v1bizfly.BizflyCloudNodeClass, error) {
 	nodeClass := &v1bizfly.BizflyCloudNodeClass{}
 	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: nodePool.Spec.Template.Spec.NodeClassRef.Name}, nodeClass); err != nil {
+		fmt.Printf("[ERROR] Failed to get NodeClass: %v\n", err)
 		return nil, err
 	}
+
 	if !nodeClass.DeletionTimestamp.IsZero() {
+		fmt.Printf("[WARN] NodeClass %s is being deleted\n", nodeClass.Name)
 		// For the purposes of NodeClass CloudProvider resolution, we treat deleting NodeClasses as NotFound,
 		// but we return a different error message to be clearer to users
 		return nil, newTerminatingNodeClassError(nodeClass.Name)
 	}
+
 	return nodeClass, nil
 }
 

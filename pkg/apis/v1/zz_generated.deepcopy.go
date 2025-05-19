@@ -19,6 +19,7 @@ limitations under the License.
 package v1
 
 import (
+	"github.com/awslabs/operatorpkg/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
@@ -122,7 +123,7 @@ func (in *BizflyCloudNodeClassStatus) DeepCopyInto(out *BizflyCloudNodeClassStat
 	*out = *in
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]metav1.Condition, len(*in))
+		*out = make([]status.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}

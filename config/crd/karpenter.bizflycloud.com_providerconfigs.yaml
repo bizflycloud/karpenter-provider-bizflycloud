@@ -1,6 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
   name: providerconfigs.karpenter.bizflycloud.com
 spec:
   group: karpenter.bizflycloud.com
@@ -11,197 +14,132 @@ spec:
     singular: providerconfig
   scope: Cluster
   versions:
-  - additionalPrinterColumns:
-    - jsonPath: .spec.region
-      name: Region
-      type: string
-    - jsonPath: .metadata.creationTimestamp
-      name: Age
-      type: date
-    name: v1
+  - name: v1
     schema:
       openAPIV3Schema:
-        description: ProviderConfig defines the configuration for the BizFly Cloud provider
+        description: ProviderConfig defines the configuration for the BizFly Cloud
+          provider
         properties:
           apiVersion:
-            description: 'APIVersion defines the versioned schema of this representation
-              of an object. Servers should convert recognized schemas to the latest
-              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
-            description: 'Kind is a string value representing the REST resource this
-              object represents. Servers may infer this from the endpoint the client
-              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
           spec:
-            description: ProviderConfigSpec defines the desired state of the BizFly
-              Cloud provider configuration
             properties:
+              cloudConfig:
+                properties:
+                  apiEndpoint:
+                    type: string
+                  retryInitialDelay:
+                    type: string
+                  retryMaxAttempts:
+                    type: integer
+                  timeout:
+                    type: string
+                type: object
+              driftDetection:
+                properties:
+                  autoRemediate:
+                    type: boolean
+                  enabled:
+                    type: boolean
+                  reconcileInterval:
+                    type: string
+                type: object
+              imageConfig:
+                properties:
+                  imageID:
+                    type: string
+                  rootDiskSize:
+                    type: integer
+                  userDataTemplate:
+                    type: string
+                type: object
               region:
-                description: Region is the BizFly Cloud region to use
-                enum:
-                - HN1
-                - HN2
-                - HCM1
                 type: string
               secretRef:
-                description: SecretRef is a reference to a secret containing authentication
-                  information
                 properties:
                   name:
-                    description: Name is the name of the secret
                     type: string
                   namespace:
-                    description: Namespace is the namespace of the secret
                     type: string
                 required:
                 - name
                 - namespace
                 type: object
               tagging:
-                description: Tagging configures resource tagging behavior
                 properties:
-                  enableResourceTags:
-                    default: true
-                    description: EnableResourceTags enables tagging of created resources
-                    type: boolean
-                  tagPrefix:
-                    default: karpenter.bizflycloud.sh/
-                    description: TagPrefix is the prefix used for all Karpenter-managed
-                      resource tags
-                    type: string
                   additionalTags:
                     additionalProperties:
                       type: string
-                    description: AdditionalTags are additional tags to apply to all
-                      created resources
                     type: object
-                type: object
-              cloudConfig:
-                description: CloudConfig provides additional configuration for the
-                  BizFly Cloud API
-                properties:
-                  apiEndpoint:
-                    default: https://manage.bizflycloud.vn/api
-                    description: APIEndpoint is the BizFly Cloud API endpoint URL
-                    type: string
-                  retryMaxAttempts:
-                    default: 5
-                    description: RetryMaxAttempts is the maximum number of retry attempts
-                      for API calls
-                    maximum: 10
-                    minimum: 1
-                    type: integer
-                  retryInitialDelay:
-                    default: 1s
-                    description: RetryInitialDelay is the initial delay between retry
-                      attempts
-                    type: string
-                  timeout:
-                    default: 30s
-                    description: Timeout is the maximum time to wait for API operations
-                    type: string
-                type: object
-              imageConfig:
-                description: ImageConfig specifies the base image and configuration
-                  for instances
-                properties:
-                  imageID:
-                    default: ubuntu-20.04
-                    description: ImageID is the ID or name of the BizFly Cloud image
-                      to use
-                    type: string
-                  sshKeyName:
-                    description: SSHKeyName is the name of the SSH key to add to instances
-                    type: string
-                  rootDiskSize:
-                    default: 20
-                    description: RootDiskSize is the size of the root disk in GB
-                    minimum: 10
-                    type: integer
-                  enableIPv6:
-                    default: false
-                    description: EnableIPv6 enables IPv6 on the instances
+                  enableResourceTags:
                     type: boolean
-                  userDataTemplate:
-                    description: UserDataTemplate is a template for additional user
-                      data to include
+                  tagPrefix:
                     type: string
                 type: object
-              driftDetection:
-                description: DriftDetection configures drift detection options
-                properties:
-                  enabled:
-                    default: true
-                    description: Enabled enables drift detection
-                    type: boolean
-                  reconcileInterval:
-                    default: 5m
-                    description: ReconcileInterval is the interval between drift checks
-                    type: string
-                  autoRemediate:
-                    default: true
-                    description: AutoRemediate automatically remediates drift if detected
-                    type: boolean
-                type: object
+              zone:
+                type: string
             required:
             - region
             - secretRef
+            - zone
             type: object
           status:
-            description: ProviderConfigStatus defines the observed state of the BizFly
-              Cloud provider configuration
             properties:
-              lastUpdated:
-                description: LastUpdated is the timestamp of the last update to the
-                  provider configuration
-                format: date-time
-                type: string
               conditions:
-                description: Conditions represent the latest available observations
-                  of the provider configuration's state
                 items:
                   description: "Condition contains details for one aspect of the current
-                    state of this API Resource.\n---\nThis struct is intended for direct
-                    use as an array at the field path .status.conditions.  For example,\n\n\n\ttype
-                    ExampleStatus struct{\n\t    // Represents the observations of a
-                    foo's current state.\n\t    // Known .status.conditions.type are:
-                    \"Available\", \"Progressing\", and \"Degraded\"\n\t    // +patchMergeKey=type\n\t
-                    \   // +patchStrategy=merge\n\t    // +listType=map\n\t    // +listMapKey=type\n\t
-                    \   Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
                     patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
                     \   // other fields\n\t}"
                   properties:
                     lastTransitionTime:
-                      description: lastTransitionTime is the last time the condition
-                        transitioned from one status to another. This should be when
-                        the underlying condition changed.  If that is not known, then
-                        using the time when the API field changed is acceptable.
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
                       format: date-time
                       type: string
                     message:
-                      description: message is a human readable message indicating details
-                        about the transition. This may be an empty string.
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: observedGeneration represents the .metadata.generation
-                        that the condition was set based upon. For instance, if .metadata.generation
-                        is currently 12, but the .status.conditions[x].observedGeneration
-                        is 9, the condition is out of date with respect to the current
-                        state of the instance.
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: reason contains a programmatic identifier indicating
-                        the reason for the condition's last transition. Producers of
-                        specific condition types may define expected values and meanings
-                        for this field, and whether the values are considered a guaranteed
-                        API. The value should be a CamelCase string. This field may
-                        not be empty.
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
@@ -214,7 +152,11 @@ spec:
                       - Unknown
                       type: string
                     type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
                         The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
                       maxLength: 316
                       pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
@@ -228,17 +170,21 @@ spec:
                   type: object
                 type: array
               instanceTypes:
-                description: InstanceTypes is the list of instance types discovered
-                  from BizFly Cloud
                 items:
                   type: string
                 type: array
+              lastUpdated:
+                format: date-time
+                type: string
               regions:
-                description: Regions is the list of available regions
                 items:
                   type: string
                 type: array
             type: object
+        required:
+        - metadata
+        - spec
+        - status
         type: object
     served: true
     storage: true

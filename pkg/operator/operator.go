@@ -35,6 +35,7 @@ type Operator struct {
 	InstanceProvider instancetype.Provider
 	Config           *v1.ProviderConfig
 	Log              *logr.Logger
+	Region           string
 }
 
 // NewOperator creates a new operator instance with all necessary components
@@ -61,19 +62,20 @@ func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.
 		InstanceProvider: instanceProvider,
 		Config:           config,
 		Log:              &log,
+		Region:           getRegion(),
 	}
 }
 
 // newBizflyClient creates a new Bizfly Cloud client with proper authentication
 func newBizflyClient() (*gobizfly.Client, error) {
-	authMethod := os.Getenv(bizflyCloudAuthMethod)
-	username := os.Getenv(bizflyCloudEmailEnvName)
-	password := os.Getenv(bizflyCloudPasswordEnvName)
-	region := os.Getenv(bizflyCloudRegionEnvName)
-	appCredId := os.Getenv(bizflyCloudAppCredID)
-	appCredSecret := os.Getenv(bizflyCloudAppCredSecret)
-	apiUrl := os.Getenv(bizflyCloudApiUrl)
-	tenantId := os.Getenv(bizflyCloudTenantID)
+	authMethod := getAuthMethod()
+	username := getUsername()
+	password := getPassword()
+	appCredId := getAppCredId()
+	appCredSecret := getAppCredSecret()
+	apiUrl := getApiUrl()
+	tenantId := getTenantId()
+	region := getRegion()
 
 	switch authMethod {
 	case authPassword:
@@ -126,4 +128,36 @@ func newBizflyClient() (*gobizfly.Client, error) {
 	bizflyClient.SetKeystoneToken(token)
 
 	return bizflyClient, nil
+}
+
+func getRegion() string {
+	return os.Getenv(bizflyCloudRegionEnvName)
+}
+
+func getApiUrl() string {
+	return os.Getenv(bizflyCloudApiUrl)
+}
+
+func getTenantId() string {
+	return os.Getenv(bizflyCloudTenantID)
+}
+
+func getAppCredId() string {
+	return os.Getenv(bizflyCloudAppCredID)
+}
+
+func getAppCredSecret() string {
+	return os.Getenv(bizflyCloudAppCredSecret)
+}
+
+func getAuthMethod() string {
+	return os.Getenv(bizflyCloudAuthMethod)
+}
+
+func getUsername() string {
+	return os.Getenv(bizflyCloudEmailEnvName)
+}
+
+func getPassword() string {
+	return os.Getenv(bizflyCloudPasswordEnvName)
 }

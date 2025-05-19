@@ -21,7 +21,6 @@ type BizflyCloudNodeClass struct {
 }
 
 type BizflyCloudNodeClassSpec struct {
-	// Region is the Proxmox Cloud region where nodes will be created
 	// +optional
 	Region string `json:"region"`
 
@@ -33,10 +32,6 @@ type BizflyCloudNodeClassSpec struct {
 	// Template is the name of the template to use for nodes
 	// +required
 	Template string `json:"template"`
-
-	// BlockDevicesStorageID is the storage ID to create/clone the VM
-	// +required
-	BlockDevicesStorageID string `json:"blockDevicesStorageID,omitempty"`
 
 	// PlacementStrategy defines how nodes should be placed across zones
 	// Only used when Zone or Subnet is not specified

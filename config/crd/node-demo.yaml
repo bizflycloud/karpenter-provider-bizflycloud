@@ -6,15 +6,14 @@ spec:
   region: HN
   zone: HN2
   template: "Ubuntu 20.04.4 LTS"
-  blockDevicesStorageID: "7088dce3-09bd-4e1d-9dbb-0d2fecf4dffa"
+  metadataOptions:
+    type: template
+  tags:
+    - "karpenter-managed=true"
   # placementStrategy:
   #   spread:
   #     zones:
   #       - HN1
-  # tags:
-  #   - "karpenter-managed=true"
-  metadataOptions:
-    type: template
   # securityGroups:
   #   - securityGroupID: "default-security-group"
 ---
@@ -31,10 +30,10 @@ spec:
       requirements:
         # - key: "node.kubernetes.io/instance-type"
         #   operator: In
-        #   values: ["4c_8g", "8c_16g", "16c_32g"]
+        #   values: ["nix.2c_3g", "nix.2c_2g", "nix.32c_64g"]
         - key: "topology.kubernetes.io/zone"
           operator: In
-          values: ["HN1", "HN2"]
+          values: ["HN2"]
         # - key: "karpenter.bizflycloud.sh/image-id"
         #   operator: In
         #   values: ["ubuntu-20.04"]
