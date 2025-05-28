@@ -131,40 +131,62 @@ func New(
 
 // GetInstanceTypes returns the supported instance types for the provider
 func (p *CloudProvider) GetInstanceTypes(ctx context.Context, nodePool *v1.NodePool) ([]*cloudprovider.InstanceType, error) {
+	p.log.V(1).Info("Getting instance types", "nodePool", nodePool.Name)
+
 	nodeClass, err := p.resolveNodeClassFromNodePool(ctx, nodePool)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			fmt.Printf("[ERROR] NodeClass not found for NodePool %s: %v\n", nodePool.Name, err)
-			// If we can't resolve the NodeClass, then it's impossible for us to resolve the instance types
-			// p.recorder.Publish(cloudproviderevents.NodePoolFailedToResolveNodeClass(nodePool))
+			p.log.Error(err, "NodeClass not found for NodePool", 
+				"nodePool", nodePool.Name,
+				"nodeClassRef", nodePool.Spec.Template.Spec.NodeClassRef.Name)
 			return nil, nil
 		}
 		return nil, fmt.Errorf("resolving node class, %w", err)
 	}
 
-	// TODO, break this coupling
+	p.log.V(1).Info("Resolved NodeClass", 
+		"nodeClass", nodeClass.Name,
+		"nodePool", nodePool.Name)
+
 	instanceTypes, err := p.instanceTypeProvider.List(ctx, nodeClass)
 	if err != nil {
-		fmt.Printf("[ERROR] Failed to list instance types: %v\n", err)
+		p.log.Error(err, "Failed to list instance types",
+			"nodeClass", nodeClass.Name,
+			"nodePool", nodePool.Name)
 		return nil, err
 	}
+
+	p.log.Info("Successfully retrieved instance types",
+		"count", len(instanceTypes),
+		"nodeClass", nodeClass.Name,
+		"nodePool", nodePool.Name)
 
 	return instanceTypes, nil
 }
 
 func (p *CloudProvider) resolveNodeClassFromNodePool(ctx context.Context, nodePool *v1.NodePool) (*v1bizfly.BizflyCloudNodeClass, error) {
+	p.log.V(1).Info("Resolving NodeClass from NodePool",
+		"nodePool", nodePool.Name,
+		"nodeClassRef", nodePool.Spec.Template.Spec.NodeClassRef.Name)
+
 	nodeClass := &v1bizfly.BizflyCloudNodeClass{}
 	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: nodePool.Spec.Template.Spec.NodeClassRef.Name}, nodeClass); err != nil {
-		fmt.Printf("[ERROR] Failed to get NodeClass: %v\n", err)
+		p.log.Error(err, "Failed to get NodeClass",
+			"nodePool", nodePool.Name,
+			"nodeClassRef", nodePool.Spec.Template.Spec.NodeClassRef.Name)
 		return nil, err
 	}
 
 	if !nodeClass.DeletionTimestamp.IsZero() {
-		fmt.Printf("[WARN] NodeClass %s is being deleted\n", nodeClass.Name)
-		// For the purposes of NodeClass CloudProvider resolution, we treat deleting NodeClasses as NotFound,
-		// but we return a different error message to be clearer to users
+		p.log.Info("NodeClass is being deleted",
+			"nodeClass", nodeClass.Name,
+			"deletionTimestamp", nodeClass.DeletionTimestamp)
 		return nil, newTerminatingNodeClassError(nodeClass.Name)
 	}
+
+	p.log.V(1).Info("Successfully resolved NodeClass",
+		"nodeClass", nodeClass.Name,
+		"nodePool", nodePool.Name)
 
 	return nodeClass, nil
 }
@@ -185,12 +207,47 @@ func (p *CloudProvider) GetSupportedNodeClasses() []status.Object {
 }
 
 // Create implements cloudprovider.CloudProvider
+// Create implements cloudprovider.CloudProvider
 func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v1.NodeClaim, error) {
-	// Convert NodeClaim to Node
+	p.log.V(1).Info("Creating node claim",
+		"name", nodeClaim.Name,
+		"labels", nodeClaim.Labels,
+		"annotations", nodeClaim.Annotations)
+
+	// Extract instance type from NodeClaim requirements (NOT from labels)
+	instanceTypeName := ""
+	for _, req := range nodeClaim.Spec.Requirements {
+		if req.Key == corev1.LabelInstanceTypeStable && len(req.Values) > 0 {
+			instanceTypeName = req.Values[0]
+			break
+		}
+	}
+
+	if instanceTypeName == "" {
+		return nil, fmt.Errorf("no instance type found in NodeClaim requirements")
+	}
+
+	// SET the instance-type label (don't check for it)
+	if nodeClaim.Labels == nil {
+		nodeClaim.Labels = make(map[string]string)
+	}
+	
+	// Add required labels
+	nodeClaim.Labels[corev1.LabelInstanceTypeStable] = instanceTypeName
+	nodeClaim.Labels[corev1.LabelArchStable] = "amd64"
+	nodeClaim.Labels["karpenter.sh/capacity-type"] = "on-demand"
+	nodeClaim.Labels[NodeLabelRegion] = p.region
+
+	p.log.Info("Set instance-type label", 
+		"name", nodeClaim.Name,
+		"instanceType", instanceTypeName,
+		"labels", nodeClaim.Labels)
+
+	// Convert NodeClaim to Node with the updated labels
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        nodeClaim.Name,
-			Labels:      nodeClaim.Labels,
+			Labels:      nodeClaim.Labels,  // Use the updated labels
 			Annotations: nodeClaim.Annotations,
 		},
 		Spec: corev1.NodeSpec{
@@ -201,6 +258,8 @@ func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v
 	// Create the node
 	createdNode, err := p.CreateNode(ctx, node)
 	if err != nil {
+		p.log.Error(err, "Failed to create node",
+			"name", nodeClaim.Name)
 		return nil, err
 	}
 
@@ -209,11 +268,21 @@ func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v
 	nodeClaim.Status.Capacity = createdNode.Status.Capacity
 	nodeClaim.Status.Allocatable = createdNode.Status.Allocatable
 
+	p.log.Info("Successfully created node claim",
+		"name", nodeClaim.Name,
+		"providerID", nodeClaim.Status.ProviderID,
+		"capacity", nodeClaim.Status.Capacity,
+		"allocatable", nodeClaim.Status.Allocatable)
+
 	return nodeClaim, nil
 }
 
 // Delete deletes an instance from BizFly Cloud
 func (p *CloudProvider) Delete(ctx context.Context, nodeClaim *v1.NodeClaim) error {
+	p.log.V(1).Info("Deleting node claim",
+		"name", nodeClaim.Name,
+		"providerID", nodeClaim.Status.ProviderID)
+
 	// Convert NodeClaim to Node
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
@@ -223,14 +292,30 @@ func (p *CloudProvider) Delete(ctx context.Context, nodeClaim *v1.NodeClaim) err
 			ProviderID: nodeClaim.Status.ProviderID,
 		},
 	}
-	return p.DeleteNode(ctx, node)
+
+	err := p.DeleteNode(ctx, node)
+	if err != nil {
+		p.log.Error(err, "Failed to delete node",
+			"name", nodeClaim.Name,
+			"providerID", nodeClaim.Status.ProviderID)
+		return err
+	}
+
+	p.log.Info("Successfully deleted node claim",
+		"name", nodeClaim.Name,
+		"providerID", nodeClaim.Status.ProviderID)
+
+	return nil
 }
 
 // List returns all instances managed by this provider
 func (p *CloudProvider) List(ctx context.Context) ([]*v1.NodeClaim, error) {
+	p.log.V(1).Info("Listing all node claims")
+
 	// Get all nodes
 	nodes := &corev1.NodeList{}
 	if err := p.kubeClient.List(ctx, nodes); err != nil {
+		p.log.Error(err, "Failed to list nodes")
 		return nil, fmt.Errorf("failed to list nodes: %w", err)
 	}
 
@@ -250,6 +335,9 @@ func (p *CloudProvider) List(ctx context.Context) ([]*v1.NodeClaim, error) {
 		nodeClaims = append(nodeClaims, nodeClaim)
 	}
 
+	p.log.Info("Successfully listed node claims",
+		"count", len(nodeClaims))
+
 	return nodeClaims, nil
 }
 
@@ -260,112 +348,153 @@ func (p *CloudProvider) GetOptions() *v1.NodePoolSpec {
 
 // CreateNode creates a new BizFly Cloud server instance
 func (p *CloudProvider) CreateNode(ctx context.Context, nodeSpec *corev1.Node) (*corev1.Node, error) {
-	start := time.Now()
-	p.log.Info("Creating node", "name", nodeSpec.Name)
+    start := time.Now()
+    p.log.Info("Creating node",
+        "name", nodeSpec.Name,
+        "labels", nodeSpec.Labels,
+        "annotations", nodeSpec.Annotations)
 
-	// Extract instance type from node labels
-	instanceType, exists := nodeSpec.Labels[NodeLabelInstanceType]
-	if !exists {
-		return nil, fmt.Errorf("node %s does not have an instance-type label", nodeSpec.Name)
-	}
+    // Extract instance type from node labels
+    instanceType, exists := nodeSpec.Labels[NodeLabelInstanceType]
+    if !exists {
+        p.log.Error(nil, "Node missing instance-type label",
+            "name", nodeSpec.Name,
+            "labels", nodeSpec.Labels)
+        return nil, fmt.Errorf("node %s does not have an instance-type label", nodeSpec.Name)
+    }
 
-	// Check if we should create a spot instance
-	isSpot := false
-	if val, exists := nodeSpec.Annotations[NodeAnnotationIsSpot]; exists {
-		isSpot, _ = strconv.ParseBool(val)
-	}
+    // Check if we should create a spot instance
+    isSpot := false
+    if val, exists := nodeSpec.Annotations[NodeAnnotationIsSpot]; exists {
+        isSpot, _ = strconv.ParseBool(val)
+        p.log.V(1).Info("Spot instance requested",
+            "name", nodeSpec.Name,
+            "isSpot", isSpot)
+    }
 
-	// Extract the image ID from node labels if present
-	imageID := ""
-	if val, exists := nodeSpec.Labels[NodeLabelImageID]; exists {
-		imageID = val
-	} else if p.config != nil && p.config.Spec.ImageConfig != nil {
-		imageID = p.config.Spec.ImageConfig.ImageID
-	}
+    // Extract the image ID from node labels if present
+    imageID := ""
+    if val, exists := nodeSpec.Labels[NodeLabelImageID]; exists {
+        imageID = val
+        p.log.V(1).Info("Using image from node labels",
+            "name", nodeSpec.Name,
+            "imageID", imageID)
+    } else if p.config != nil && p.config.Spec.ImageConfig != nil {
+        imageID = p.config.Spec.ImageConfig.ImageID
+        p.log.V(1).Info("Using image from config",
+            "name", nodeSpec.Name,
+            "imageID", imageID)
+    }
 
-	// Generate user-data for bootstrapping the node
-	userData, err := p.generateUserData(nodeSpec)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate user data: %w", err)
-	}
+    // Create the instance
+    instanceProvider := &instance.Provider{
+        Client:       p.kubeClient,
+        Log:          p.log,
+        BizflyClient: p.bizflyClient,
+        Region:       p.region,
+        Config:       p.config,
+    }
 
-	// Create the instance
-	instanceProvider := &instance.Provider{
-		Client:       p.kubeClient,
-		Log:          p.log,
-		BizflyClient: p.bizflyClient,
-		Region:       p.region,
-		Config:       p.config,
-	}
-	instance, err := instanceProvider.CreateInstance(ctx, nodeSpec.Name, instanceType, imageID, userData, isSpot)
-	if err != nil {
-		apiErrors.WithLabelValues("create_instance").Inc()
-		return nil, fmt.Errorf("failed to create instance: %w", err)
-	}
+    p.log.V(1).Info("Creating instance",
+        "name", nodeSpec.Name,
+        "instanceType", instanceType,
+        "imageID", imageID,
+        "isSpot", isSpot)
 
-	// Convert the instance to a node
-	node := instanceProvider.ConvertToNode(instance, isSpot)
+    // Resolve nodeClass from nodeSpec
+    nodeClass, err := p.resolveNodeClassFromNodeSpec(ctx, nodeSpec)
+    if err != nil {
+        return nil, fmt.Errorf("failed to resolve node class: %w", err)
+    }
 
-	// Copy over any other labels from the nodeSpec
-	for key, value := range nodeSpec.Labels {
-		if _, exists := node.Labels[key]; !exists {
-			node.Labels[key] = value
-		}
-	}
+    // Create nodeClaim from nodeSpec
+    nodeClaim := p.convertNodeSpecToNodeClaim(nodeSpec)
 
-	// Copy over any annotations from the nodeSpec
-	if node.Annotations == nil {
-		node.Annotations = make(map[string]string)
-	}
+    // Create the instance
+    gobizflyServer, err := instanceProvider.CreateInstance(ctx, nodeClaim, nodeClass)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create instance: %w", err)
+    }
 
-	for key, value := range nodeSpec.Annotations {
-		node.Annotations[key] = value
-	}
+    // Convert gobizfly.Server to instance.Instance
+    instanceObj := instanceProvider.ConvertGobizflyServerToInstance(gobizflyServer)
+    if instanceObj == nil {
+        return nil, fmt.Errorf("failed to convert server to instance")
+    }
 
-	// Copy over any taints from the nodeSpec
-	node.Spec.Taints = append(node.Spec.Taints, nodeSpec.Spec.Taints...)
+    // Convert the instance to a node
+    node := instanceProvider.ConvertToNode(instanceObj, isSpot)
 
-	// Add spot instance taint if needed
-	if isSpot {
-		node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
-			Key:    "karpenter.bizflycloud.sh/spot",
-			Value:  "true",
-			Effect: corev1.TaintEffectNoSchedule,
-		})
-	}
+    // Copy over any other labels from the nodeSpec
+    for key, value := range nodeSpec.Labels {
+        if _, exists := node.Labels[key]; !exists {
+            node.Labels[key] = value
+        }
+    }
 
-	p.log.Info("Successfully created node",
-		"name", node.Name,
-		"providerID", node.Spec.ProviderID,
-		"isSpot", isSpot,
-		"zone", instance.Zone,
-		"flavor", instance.Flavor,
-		"duration", time.Since(start),
-	)
+    // Copy over any annotations from the nodeSpec
+    if node.Annotations == nil {
+        node.Annotations = make(map[string]string)
+    }
 
-	// Record metrics
-	instanceCreationDuration.Observe(time.Since(start).Seconds())
+    for key, value := range nodeSpec.Annotations {
+        node.Annotations[key] = value
+    }
 
-	return node, nil
+    // Copy over any taints from the nodeSpec
+    node.Spec.Taints = append(node.Spec.Taints, nodeSpec.Spec.Taints...)
+
+    // Add spot instance taint if needed
+    if isSpot {
+        node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+            Key:    "karpenter.bizflycloud.sh/spot",
+            Value:  "true",
+            Effect: corev1.TaintEffectNoSchedule,
+        })
+    }
+
+    duration := time.Since(start)
+    p.log.Info("Successfully created node",
+        "name", node.Name,
+        "providerID", node.Spec.ProviderID,
+        "isSpot", isSpot,
+        "zone", instanceObj.Zone,
+        "flavor", instanceObj.Flavor,
+        "duration", duration,
+        "labels", node.Labels,
+        "annotations", node.Annotations,
+        "taints", node.Spec.Taints)
+
+    // Record metrics
+    instanceCreationDuration.Observe(duration.Seconds())
+
+    return node, nil
 }
+
 
 // generateUserData creates the cloud-init user data for node bootstrapping
 func (p *CloudProvider) generateUserData(nodeSpec *corev1.Node) (string, error) {
+	p.log.V(1).Info("Generating user data",
+		"name", nodeSpec.Name)
+
 	// Get API server endpoint and token from environment if defined
 	apiServerEndpoint := os.Getenv("KARPENTER_API_SERVER_ENDPOINT")
 	if apiServerEndpoint == "" {
 		apiServerEndpoint = "${API_SERVER_ENDPOINT}"
+		p.log.V(1).Info("Using default API server endpoint template")
 	}
 
 	token := os.Getenv("KARPENTER_TOKEN")
 	if token == "" {
 		token = "${TOKEN}"
+		p.log.V(1).Info("Using default token template")
 	}
 
 	// Get custom user data template if defined
 	customUserData := ""
 	if p.config != nil && p.config.Spec.ImageConfig != nil && p.config.Spec.ImageConfig.UserDataTemplate != "" {
 		customUserData = p.config.Spec.ImageConfig.UserDataTemplate
+		p.log.V(1).Info("Using custom user data template from config")
 	}
 
 	// Build the base user data
@@ -391,21 +520,21 @@ write_files:
 	// Add zone label if present
 	if zone, exists := nodeSpec.Labels[NodeLabelZone]; exists {
 		userData += "\n    kubectl --kubeconfig /etc/kubernetes/kubelet.conf label node $NODENAME " + NodeLabelZone + "=" + zone
+		p.log.V(1).Info("Added zone label to user data",
+			"zone", zone)
 	}
 
 	// Add image label if present
 	if image, exists := nodeSpec.Labels[NodeLabelImageID]; exists {
 		userData += "\n    kubectl --kubeconfig /etc/kubernetes/kubelet.conf label node $NODENAME " + NodeLabelImageID + "=" + image
-	}
-
-	// Add spot annotation if present
-	if spot, exists := nodeSpec.Annotations[NodeAnnotationIsSpot]; exists && spot == "true" {
-		userData += "\n    kubectl --kubeconfig /etc/kubernetes/kubelet.conf annotate node $NODENAME " + NodeAnnotationIsSpot + "=true"
+		p.log.V(1).Info("Added image label to user data",
+			"image", image)
 	}
 
 	// Add custom user data if available
 	if customUserData != "" {
 		userData += "\n" + customUserData
+		p.log.V(1).Info("Added custom user data template")
 	}
 
 	// Add runcmd to execute the bootstrap script
@@ -414,6 +543,10 @@ write_files:
 runcmd:
   - /etc/kubernetes/bootstrap-kubelet.sh
 `
+
+	p.log.V(1).Info("Successfully generated user data",
+		"name", nodeSpec.Name,
+		"hasCustomTemplate", customUserData != "")
 
 	return userData, nil
 }
@@ -636,4 +769,62 @@ func (p *CloudProvider) Name() string {
 // RepairPolicies returns the repair policies for the provider
 func (p *CloudProvider) RepairPolicies() []cloudprovider.RepairPolicy {
 	return nil
+}
+
+// resolveNodeClassFromNodeSpec resolves the NodeClass from a node spec
+func (p *CloudProvider) resolveNodeClassFromNodeSpec(ctx context.Context, nodeSpec *corev1.Node) (*v1bizfly.BizflyCloudNodeClass, error) {
+    // For now, use the default NodeClass
+    // In a real implementation, you might extract this from node labels or annotations
+    nodeClass := &v1bizfly.BizflyCloudNodeClass{}
+    if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: "default"}, nodeClass); err != nil {
+        return nil, err
+    }
+    return nodeClass, nil
+}
+
+// convertNodeSpecToNodeClaim converts a Node spec to a NodeClaim
+func (p *CloudProvider) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v1.NodeClaim {
+    // Create requirements from node labels
+    var requirements []v1.NodeSelectorRequirementWithMinValues
+    
+    if instanceType, exists := nodeSpec.Labels[corev1.LabelInstanceTypeStable]; exists {
+        requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+            NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+                Key:      corev1.LabelInstanceTypeStable,
+                Operator: corev1.NodeSelectorOpIn,
+                Values:   []string{instanceType},
+            },
+        })
+    }
+    
+    if arch, exists := nodeSpec.Labels[corev1.LabelArchStable]; exists {
+        requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+            NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+                Key:      corev1.LabelArchStable,
+                Operator: corev1.NodeSelectorOpIn,
+                Values:   []string{arch},
+            },
+        })
+    }
+
+    // Add capacity type requirement
+    requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+        NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+            Key:      "karpenter.sh/capacity-type",
+            Operator: corev1.NodeSelectorOpIn,
+            Values:   []string{"on-demand"},
+        },
+    })
+
+    return &v1.NodeClaim{
+        ObjectMeta: metav1.ObjectMeta{
+            Name:        nodeSpec.Name,
+            Labels:      nodeSpec.Labels,
+            Annotations: nodeSpec.Annotations,
+        },
+        Spec: v1.NodeClaimSpec{
+            Requirements: requirements,
+            Taints:       nodeSpec.Spec.Taints,
+        },
+    }
 }

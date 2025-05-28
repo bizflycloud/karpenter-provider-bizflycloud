@@ -1,16 +1,17 @@
 # Build stage
-FROM golang:1.23-alpine as builder
+FROM golang:1.23-alpine AS builder
 
 ENV GOTOOLCHAIN=auto
+
+# Declare build arguments AFTER FROM instruction
+ARG VERSION=dev
+ARG BUILDDATE
+
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates make
 
 # Set working directory
 WORKDIR /workspace
-
-# Build arguments
-ARG VERSION=dev
-ARG BUILDDATE
 
 # Copy the Go Modules manifests
 COPY go.mod go.sum ./
@@ -21,7 +22,7 @@ COPY . .
 
 # Build with version information
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags "-X main.version=${VERSION} -X main.buildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ') -w -s" \
+    -ldflags "-X main.version=${VERSION} -X main.buildDate=${BUILDDATE} -w -s" \
     -a -o karpenter-provider-bizflycloud ./cmd/controller
 
 # Runtime stage
@@ -37,6 +38,8 @@ WORKDIR /
 COPY --from=builder --chown=nonroot:nonroot /workspace/karpenter-provider-bizflycloud /karpenter-provider-bizflycloud
 
 # Add version and build information
+ARG VERSION=dev
+ARG BUILDDATE
 LABEL org.opencontainers.image.title="Karpenter Provider for BizFly Cloud" \
       org.opencontainers.image.description="Karpenter Provider implementation for BizFly Cloud" \
       org.opencontainers.image.version="${VERSION}" \

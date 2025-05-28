@@ -39,6 +39,7 @@ type Operator struct {
 }
 
 // NewOperator creates a new operator instance with all necessary components
+// NewOperator creates a new operator instance with all necessary components
 func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.Context, *Operator) {
 	// Initialize log
 	log := log.FromContext(ctx)
@@ -50,8 +51,8 @@ func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.
 		os.Exit(1)
 	}
 
-	// Initialize instance type provider
-	instanceProvider := instancetype.NewDefaultProvider(client)
+	// Initialize instance type provider - FIXED: Pass both client and logger
+	instanceProvider := instancetype.NewDefaultProvider(client, log)
 
 	// Initialize provider config
 	config := &v1.ProviderConfig{}
@@ -65,6 +66,7 @@ func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.
 		Region:           getRegion(),
 	}
 }
+
 
 // newBizflyClient creates a new Bizfly Cloud client with proper authentication
 func newBizflyClient() (*gobizfly.Client, error) {

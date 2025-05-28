@@ -28,9 +28,9 @@ spec:
   template:
     spec:
       requirements:
-        # - key: "node.kubernetes.io/instance-type"
-        #   operator: In
-        #   values: ["nix.2c_3g", "nix.2c_2g", "nix.32c_64g"]
+        - key: "node.kubernetes.io/instance-type"
+          operator: In
+          values: ["nix.2c_3g", "nix.2c_2g", "nix.32c_64g"]
         - key: "topology.kubernetes.io/zone"
           operator: In
           values: ["HN2"]

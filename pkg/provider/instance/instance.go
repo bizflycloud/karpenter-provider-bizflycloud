@@ -1,22 +1,40 @@
 package instance
 
 import (
-	"context"
-	"encoding/base64"
-	"fmt"
-	"os"
-	"strings"
-	"time"
+    "context"
+    // "encoding/base64"
+    "fmt"
+    "os"
+    "strings"
+    "time"
 
-	"github.com/bizflycloud/gobizfly"
-	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
-	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
+    "github.com/bizflycloud/gobizfly"
+    "github.com/go-logr/logr"
+    v1bizfly "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
+    corev1 "k8s.io/api/core/v1"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+    "sigs.k8s.io/controller-runtime/pkg/client"
+    karpenterv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
 )
+
+
+// Helper functions for pointers
+func stringPtr(s string) *string {
+    return &s
+}
+
+func boolPtr(b bool) *bool {
+    return &b
+}
+
+func extractTagsFromMetadata(metadata map[string]string) []string {
+    var tags []string
+    for key, value := range metadata {
+        tags = append(tags, fmt.Sprintf("%s=%s", key, value))
+    }
+    return tags
+}
+
 
 const (
 	// ProviderID prefix for BizFly Cloud instances
@@ -35,15 +53,13 @@ const (
 	NodeAnnotationIsSpot = "karpenter.bizflycloud.sh/instance-spot"
 )
 
-// Provider implements instance management for BizFly Cloud
 type Provider struct {
-	Client       client.Client
-	Log          logr.Logger
-	BizflyClient *gobizfly.Client
-	Region       string
-	Config       *v1.ProviderConfig
+    Client       client.Client
+    Log          logr.Logger
+    BizflyClient *gobizfly.Client
+    Region       string
+    Config       *v1bizfly.ProviderConfig
 }
-
 // Instance represents a BizFly Cloud server instance
 type Instance struct {
 	ID        string
@@ -68,199 +84,94 @@ const (
 )
 
 // CreateInstance creates a new BizFly Cloud server instance
-func (p *Provider) CreateInstance(ctx context.Context, nodeName string, flavor string, image string, userData string, isSpot bool) (*Instance, error) {
-	p.Log.Info("Creating instance",
-		"name", nodeName,
-		"flavor", flavor,
-		"region", p.Region,
-		"spot", isSpot,
-	)
+func (p *Provider) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.NodeClaim, nodeClass *v1bizfly.BizflyCloudNodeClass) (*gobizfly.Server, error) {
+    // Extract instance type
+    instanceTypeName := ""
+    for _, req := range nodeClaim.Spec.Requirements {
+        if req.Key == corev1.LabelInstanceTypeStable && len(req.Values) > 0 {
+            instanceTypeName = req.Values[0]
+            break
+        }
+    }
 
-	// Get config values or use defaults
-	rootDiskSize := defaultRootDiskSize
-	if p.Config != nil && p.Config.Spec.ImageConfig != nil && p.Config.Spec.ImageConfig.RootDiskSize > 0 {
-		rootDiskSize = p.Config.Spec.ImageConfig.RootDiskSize
-	}
+    if instanceTypeName == "" {
+        return nil, fmt.Errorf("no instance type found in requirements")
+    }
 
-	// Use default image if not specified
-	if image == "" {
-		if p.Config != nil && p.Config.Spec.ImageConfig != nil && p.Config.Spec.ImageConfig.ImageID != "" {
-			image = p.Config.Spec.ImageConfig.ImageID
-		} else {
-			image = defaultImageName
-		}
-	}
+    // Use default image ID for now
+    imageID := "61304d7b-f5fc-42ac-bbcd-50d73df967da"
 
-	// Create resource tags
-	tags := []string{
-		fmt.Sprintf("karpenter-node=%s", nodeName),
-		fmt.Sprintf("karpenter-cluster=%s", "kubernetes"),
-	}
+    // Get availability zone
+    zone := "HN2" // Default
+    for _, req := range nodeClaim.Spec.Requirements {
+        if req.Key == corev1.LabelTopologyZone && len(req.Values) > 0 {
+            zone = req.Values[0]
+            break
+        }
+    }
 
-	// Add additional tags if specified
-	if p.Config != nil && p.Config.Spec.Tagging != nil && p.Config.Spec.Tagging.EnableResourceTags {
-		// Add provisioner tag
-		tags = append(tags, "karpenter-provisioner=default")
+    // Generate node name
+    nodeName := nodeClaim.Name
 
-		// Add additional tags if any
-		if p.Config.Spec.Tagging.AdditionalTags != nil {
-			for k, v := range p.Config.Spec.Tagging.AdditionalTags {
-				tags = append(tags, fmt.Sprintf("%s=%s", k, v))
-			}
-		}
-	}
+    // Determine server type and disk configuration
+    serverType := "premium"
+    diskType := "SSD"
+    rootDiskSize := 40
 
-	// If using spot instances, add tag
-	if isSpot {
-		tags = append(tags, "karpenter-spot=true")
-	}
+    if strings.Contains(instanceTypeName, "basic") {
+        serverType = "basic"
+        diskType = "HDD"
+    } else if strings.Contains(instanceTypeName, "enterprise") {
+        serverType = "enterprise"
+        diskType = "SSD"
+    }
 
-	// In a mock implementation, just return a mock instance
-	if p.BizflyClient == nil || os.Getenv("KARPENTER_BIZFLYCLOUD_MOCK") == "true" {
-		p.Log.Info("Using mock instance creation")
-		// Create a mock server instance
-		instance := &Instance{
-			ID:        fmt.Sprintf("instance-%s", nodeName),
-			Name:      nodeName,
-			Status:    "ACTIVE",
-			Region:    p.Region,
-			Zone:      fmt.Sprintf("%s-a", p.Region),
-			Flavor:    flavor,
-			IPAddress: "192.168.1.100",
-			IsSpot:    isSpot,
-			Tags:      tags,
-			CreatedAt: time.Now(),
-		}
+    p.Log.Info("Creating instance",
+        "name", nodeName,
+        "instanceType", instanceTypeName,
+        "imageID", imageID,
+        "zone", zone,
+        "serverType", serverType)
 
-		p.Log.Info("Server creation completed", "id", instance.ID, "name", instance.Name)
-		return instance, nil
-	}
+    // Create server options with all required fields
+    opts := &gobizfly.ServerCreateRequest{
+        Name:             nodeName,
+        FlavorName:       instanceTypeName,
+        Type:             serverType,
+        AvailabilityZone: zone,
+        VPCNetworkIDs:    []string{"e84362d6-0632-4950-87ac-e7bc7d74be6d"},
+        IsCreatedWan:     boolPtr(true),
+        OS: &gobizfly.ServerOS{
+            Type: "image",
+            ID:   imageID,
+        },
+        RootDisk: &gobizfly.ServerDisk{
+            Size: rootDiskSize,
+            Type: stringPtr(diskType),
+        },
+        Password:    true,
+        Quantity:    1, // FIXED: Use int instead of *bool
+        NetworkPlan: "free_datatransfer",
+        Firewalls:   []string{},
+    }
 
-	// For a real implementation, determine availability zone
-	zones, err := p.GetAvailableZones(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get available zones: %w", err)
-	}
+    // Create the server
+    response, err := p.BizflyClient.CloudServer.Create(ctx, opts)
+    if err != nil {
+        p.Log.Error(err, "Failed to create instance",
+            "name", nodeName,
+            "instanceType", instanceTypeName,
+            "imageID", imageID,
+            "request", opts)
+        return nil, fmt.Errorf("failed to create server: %w", err)
+    }
 
-	if len(zones) == 0 {
-		return nil, fmt.Errorf("no availability zones found in region %s", p.Region)
-	}
+    p.Log.Info("Server creation initiated",
+        "name", nodeName,
+        "taskID", response.Task[0])
 
-	// Pick a zone (in production you might use more sophisticated logic)
-	zone := zones[0]
-
-	// Get offering details to verify it exists
-	offering, err := p.getInstanceOfferingByName(ctx, flavor)
-	if err != nil {
-		return nil, fmt.Errorf("invalid flavor %s: %w", flavor, err)
-	}
-
-	// Create server options
-	opts := &gobizfly.ServerCreateRequest{
-		Name:             nodeName,
-		FlavorName:       flavor,
-		Type:             "premium",
-		AvailabilityZone: zone,
-		UserData:         base64.StdEncoding.EncodeToString([]byte(userData)),
-		OS: &gobizfly.ServerOS{
-			Type: image,
-		},
-		RootDisk: &gobizfly.ServerDisk{
-			Size: rootDiskSize,
-		},
-		Password: true,
-	}
-
-	// Create the server
-	server, err := p.BizflyClient.CloudServer.Create(ctx, opts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create server: %w", err)
-	}
-
-	// Get the task ID from the response
-	if len(server.Task) == 0 {
-		return nil, fmt.Errorf("no task ID returned from server creation")
-	}
-	taskID := server.Task[0]
-
-	// Wait for the server to become active
-	p.Log.Info("Waiting for server to become active", "name", nodeName)
-
-	var instance *Instance
-	var serverID string
-	err = wait.PollImmediate(pollInterval, maxServerWaitTime, func() (bool, error) {
-		// Get the task status
-		task, err := p.BizflyClient.CloudServer.GetTask(ctx, taskID)
-		if err != nil {
-			return false, fmt.Errorf("failed to get task status: %w", err)
-		}
-
-		// Check if task is completed
-		if task.Ready {
-			// Get the server details
-			inst, err := p.BizflyClient.CloudServer.Get(ctx, task.Result.ID)
-			if err != nil {
-				return false, fmt.Errorf("failed to get server: %w", err)
-			}
-
-			// Get the first WAN IP address
-			var ipAddress string
-			if len(inst.IPAddresses.WanV4Addresses) > 0 {
-				ipAddress = inst.IPAddresses.WanV4Addresses[0].Address
-			} else if len(inst.IPAddresses.LanAddresses) > 0 {
-				ipAddress = inst.IPAddresses.LanAddresses[0].Address
-			} else {
-				return false, fmt.Errorf("no IP address found for server")
-			}
-
-			// Parse the creation time
-			createdAt, err := time.Parse(time.RFC3339, inst.CreatedAt)
-			if err != nil {
-				createdAt = time.Now()
-			}
-
-			instance = &Instance{
-				ID:        inst.ID,
-				Name:      inst.Name,
-				Status:    inst.Status,
-				Region:    p.Region,
-				Zone:      inst.AvailabilityZone,
-				Flavor:    offering.Name,
-				IPAddress: ipAddress,
-				IsSpot:    isSpot,
-				Tags:      tags,
-				CreatedAt: createdAt,
-			}
-			serverID = inst.ID
-			return true, nil
-		}
-
-		// Check if task is in error state
-		if !task.Result.Success {
-			return false, fmt.Errorf("server creation failed: %s", task.Result.Action)
-		}
-
-		return false, nil
-	})
-
-	if err != nil {
-		// If timed out, try to delete the instance to avoid leaks
-		p.Log.Error(err, "Timed out waiting for server to become active, cleaning up", "name", nodeName)
-		if delErr := p.DeleteInstance(ctx, serverID); delErr != nil {
-			p.Log.Error(delErr, "Failed to clean up server after timeout", "name", nodeName)
-		}
-		return nil, fmt.Errorf("timed out waiting for server to become active: %w", err)
-	}
-
-	p.Log.Info("Server creation completed",
-		"id", instance.ID,
-		"name", instance.Name,
-		"zone", instance.Zone,
-		"flavor", instance.Flavor,
-		"spot", instance.IsSpot,
-	)
-
-	return instance, nil
+    // TODO: Implement polling logic to wait for server creation
+    return nil, nil
 }
 
 // DeleteInstance deletes a BizFly Cloud server instance
@@ -325,38 +236,6 @@ func (p *Provider) GetInstance(ctx context.Context, instanceID string) (*Instanc
 		return instance, nil
 	}
 
-	// For production, we'd get the server from the API
-	/* For reference, here's a real API call using gobizfly client:
-
-	// Get the server
-	server, err := p.bizflyClient.Server.Get(ctx, instanceID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get server: %w", err)
-	}
-
-	// Convert to our instance type
-	isSpot := false
-	for _, tag := range server.Tags {
-		if tag == "karpenter-spot=true" {
-			isSpot = true
-			break
-		}
-	}
-
-	instance := &Instance{
-		ID:        server.ID,
-		Name:      server.Name,
-		Status:    server.Status,
-		Region:    p.region,
-		Zone:      server.AvailabilityZone,
-		Flavor:    server.FlavorName,
-		IPAddress: server.IPAddresses[0].Address,
-		IsSpot:    isSpot,
-		Tags:      server.Tags,
-		CreatedAt: server.Created,
-	}
-	*/
-
 	// For mock, just return a default instance
 	instance := &Instance{
 		ID:        instanceID,
@@ -371,60 +250,95 @@ func (p *Provider) GetInstance(ctx context.Context, instanceID string) (*Instanc
 		CreatedAt: time.Now(),
 	}
 
+	p.Log.Info("Retrieved instance details",
+		"id", instance.ID,
+		"name", instance.Name,
+		"status", instance.Status,
+		"zone", instance.Zone,
+		"flavor", instance.Flavor,
+		"spot", instance.IsSpot,
+	)
+
 	return instance, nil
 }
 
+func (p *Provider) generateUserData(nodeClaim *karpenterv1.NodeClaim, nodeClass *v1bizfly.BizflyCloudNodeClass) (string, error) {
+    // Basic user data for node bootstrapping
+    userData := `#!/bin/bash
+# Basic node setup
+apt-get update
+apt-get install -y kubelet kubeadm kubectl
+systemctl enable kubelet
+systemctl start kubelet
+`
+
+    // TODO: Add UserData field to BizflyCloudNodeClassSpec if needed
+    // For now, just return the basic user data
+    return userData, nil
+}
+
+
+
+
 // ConvertToNode converts a BizFly Cloud server instance to a Kubernetes node
 func (p *Provider) ConvertToNode(instance *Instance, isSpot bool) *corev1.Node {
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: instance.Name,
-			Labels: map[string]string{
-				NodeLabelRegion:                 instance.Region,
-				NodeLabelZone:                   instance.Zone,
-				NodeLabelInstanceType:           instance.Flavor,
-				"karpenter.sh/provisioner-name": "default",
-			},
-			Annotations: map[string]string{
-				"karpenter.bizflycloud.sh/instance-id": instance.ID,
-			},
-		},
-		Spec: corev1.NodeSpec{
-			ProviderID: fmt.Sprintf("%s%s", ProviderIDPrefix, instance.ID),
-		},
-	}
+    p.Log.V(1).Info("Converting instance to node",
+        "instanceID", instance.ID,
+        "name", instance.Name,
+        "flavor", instance.Flavor,
+        "spot", isSpot,
+    )
 
-	// Add spot instance annotation if needed
-	if isSpot || instance.IsSpot {
-		node.Annotations[NodeAnnotationIsSpot] = "true"
-	}
+    node := &corev1.Node{
+        ObjectMeta: metav1.ObjectMeta{
+            Name: instance.Name,
+            Labels: map[string]string{
+                NodeLabelRegion:                 instance.Region,
+                NodeLabelZone:                   instance.Zone,
+                NodeLabelInstanceType:           instance.Flavor,
+                "karpenter.sh/provisioner-name": "default",
+            },
+            Annotations: map[string]string{
+                "karpenter.bizflycloud.sh/instance-id": instance.ID,
+            },
+        },
+        Spec: corev1.NodeSpec{
+            ProviderID: fmt.Sprintf("%s%s", ProviderIDPrefix, instance.ID),
+        },
+    }
 
-	// Extract labels and annotations from tags
-	for _, tag := range instance.Tags {
-		parts := strings.SplitN(tag, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
+    // Add spot instance annotation if needed
+    if isSpot || instance.IsSpot {
+        node.Annotations[NodeAnnotationIsSpot] = "true"
+    }
 
-		key, value := parts[0], parts[1]
+    // Extract labels and annotations from tags
+    for _, tag := range instance.Tags {
+        parts := strings.SplitN(tag, "=", 2)
+        if len(parts) != 2 {
+            continue
+        }
 
-		// Add tag as label if it starts with the label prefix
-		if strings.HasPrefix(key, "label/") {
-			labelKey := strings.TrimPrefix(key, "label/")
-			if labelKey != "" {
-				node.Labels[labelKey] = value
-			}
-		} else if strings.HasPrefix(key, "annotation/") {
-			// Add tag as annotation if it starts with the annotation prefix
-			annotKey := strings.TrimPrefix(key, "annotation/")
-			if annotKey != "" {
-				node.Annotations[annotKey] = value
-			}
-		}
-	}
+        key, value := parts[0], parts[1]
 
-	return node
+        // Add tag as label if it starts with the label prefix
+        if strings.HasPrefix(key, "label/") {
+            labelKey := strings.TrimPrefix(key, "label/")
+            if labelKey != "" {
+                node.Labels[labelKey] = value
+            }
+        } else if strings.HasPrefix(key, "annotation/") {
+            // Add tag as annotation if it starts with the annotation prefix
+            annotKey := strings.TrimPrefix(key, "annotation/")
+            if annotKey != "" {
+                node.Annotations[annotKey] = value
+            }
+        }
+    }
+
+    return node
 }
+
 
 // GetAvailableZones returns the available zones in the configured region
 func (p *Provider) GetAvailableZones(ctx context.Context) ([]string, error) {
@@ -452,3 +366,73 @@ type InstanceOffering struct {
 	Name   string
 	Region string
 }
+
+// Add this conversion function to your instance.go:
+// Add this conversion function to your instance.go:
+func (p *Provider) ConvertGobizflyServerToInstance(server *gobizfly.Server) *Instance {
+    if server == nil {
+        return nil
+    }
+
+    // Extract zone from availability zone or use default
+    zone := server.AvailabilityZone
+    if zone == "" {
+        zone = fmt.Sprintf("%s-a", p.Region)
+    }
+
+    // Extract IP address from IPAddresses structure
+    ipAddress := ""
+    if len(server.IPAddresses.WanV4Addresses) > 0 {
+        ipAddress = server.IPAddresses.WanV4Addresses[0].Address
+    } else if len(server.IPAddresses.LanAddresses) > 0 {
+        ipAddress = server.IPAddresses.LanAddresses[0].Address
+    }
+
+    // Convert CreatedAt string to time.Time
+    var createdAt time.Time
+    if server.CreatedAt != "" {
+        // Try different time formats that BizFly might use
+        formats := []string{
+            "2006-01-02T15:04:05Z",
+            "2006-01-02T15:04:05",
+            "2006-01-02 15:04:05",
+            time.RFC3339,
+        }
+        
+        for _, format := range formats {
+            if parsed, err := time.Parse(format, server.CreatedAt); err == nil {
+                createdAt = parsed
+                break
+            }
+        }
+        
+        // If all parsing fails, use current time
+        if createdAt.IsZero() {
+            p.Log.V(1).Info("Failed to parse CreatedAt, using current time", 
+                "createdAt", server.CreatedAt)
+            createdAt = time.Now()
+        }
+    } else {
+        createdAt = time.Now()
+    }
+
+    // Extract tags from metadata
+    var tags []string
+    for key, value := range server.Metadata {
+        tags = append(tags, fmt.Sprintf("%s=%s", key, value))
+    }
+
+    return &Instance{
+        ID:        server.ID,
+        Name:      server.Name,
+        Status:    server.Status,
+        Region:    p.Region,
+        Zone:      zone,
+        Flavor:    server.Flavor.Name,
+        IPAddress: ipAddress,
+        IsSpot:    false, // You can determine this from metadata or server type
+        Tags:      tags,
+        CreatedAt: createdAt,
+    }
+}
+
