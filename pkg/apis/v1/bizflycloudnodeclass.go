@@ -8,7 +8,7 @@ import (
 // +kubebuilder:object:root=true
 // +kubebuilder:printcolumn:name="Ready",type="string",JSONPath=".status.conditions[?(@.type==\"Ready\")].status",description=""
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description=""
-// +kubebuilder:printcolumn:name="Role",type="string",JSONPath=".spec.role",priority=1,description=""
+// +kubebuilder:printcolumn:name="Category",type="string",JSONPath=".spec.nodeCategory",priority=1,description=""
 // +kubebuilder:resource:path=bizflycloudnodeclasses,scope=Cluster,categories=karpenter,shortName={bizflycloudnc,bizflycloudncs}
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
@@ -33,6 +33,33 @@ type BizflyCloudNodeClassSpec struct {
 	// +required
 	Template string `json:"template"`
 
+	// NodeCategory specifies the category of nodes to provision
+	// +kubebuilder:validation:Enum=basic;premium;enterprise;dedicated
+	// +kubebuilder:default="basic"
+	// +optional
+	NodeCategory string `json:"nodeCategory,omitempty"`
+
+	// ImageID is the ID of the image to use for nodes
+	// +optional
+	ImageID string `json:"imageId,omitempty"`
+
+	// DiskType specifies the type of disk to use (SSD, HDD)
+	// +kubebuilder:validation:Enum=SSD;HDD
+	// +kubebuilder:default="SSD"
+	// +optional
+	DiskType string `json:"diskType,omitempty"`
+
+	// RootDiskSize specifies the size of the root disk in GB
+	// +kubebuilder:validation:Minimum=20
+	// +kubebuilder:validation:Maximum=1000
+	// +kubebuilder:default=40
+	// +optional
+	RootDiskSize int `json:"rootDiskSize,omitempty"`
+
+	// VPCNetworkIDs is the list of VPC network IDs to attach to the nodes
+	// +optional
+	VPCNetworkIDs []string `json:"vpcNetworkIds,omitempty"`
+
 	// PlacementStrategy defines how nodes should be placed across zones
 	// Only used when Zone or Subnet is not specified
 	// +optional
@@ -53,6 +80,7 @@ type BizflyCloudNodeClassSpec struct {
 	SecurityGroups []SecurityGroupsTerm `json:"securityGroups,omitempty"`
 }
 
+// Rest of your existing types remain the same...
 type PlacementStrategy struct {
 	Spread *SpreadStrategy `json:"spread,omitempty"`
 }

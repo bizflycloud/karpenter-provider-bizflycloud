@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/awslabs/operatorpkg/status"
@@ -26,7 +27,7 @@ import (
 	v1bizfly "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instance"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype"
-)
+)                                                                                                                                                          
 
 const (
 	// ProviderName is the name of the provider
@@ -52,6 +53,12 @@ const (
 
 	// NodeLabelImageID is the label for image ID
 	NodeLabelImageID = "karpenter.bizflycloud.sh/image-id"
+
+    NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
+    
+	DriftReasonNodeNotFound      = "NodeNotFound"
+    DriftReasonNodeClassDrifted  = "NodeClassDrifted"
+    DriftReasonInstanceNotFound  = "InstanceNotFound"
 )
 
 var (
@@ -72,6 +79,14 @@ var (
 		},
 	)
 
+	driftCheckDuration = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "karpenter_bizflycloud_drift_check_duration_seconds",
+			Help:    "Histogram of drift check durations in seconds",
+			Buckets: prometheus.ExponentialBuckets(0.1, 2, 10),
+		},
+	)
+
 	apiErrors = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "karpenter_bizflycloud_api_errors_total",
@@ -79,22 +94,50 @@ var (
 		},
 		[]string{"operation"},
 	)
+
+    // Add these new metrics to your existing metrics
+    nodeConsolidationEvents = prometheus.NewCounter(
+        prometheus.CounterOpts{
+            Name: "karpenter_bizflycloud_node_consolidation_events_total",
+            Help: "Total number of node consolidation events",
+        },
+    )
+
+    nodeTerminationDuration = prometheus.NewHistogram(
+        prometheus.HistogramOpts{
+            Name:    "karpenter_bizflycloud_node_termination_duration_seconds",
+            Help:    "Time taken to terminate nodes during scale-down",
+            Buckets: prometheus.ExponentialBuckets(1, 2, 10),
+        },
+    )
+
+    underutilizedNodesDetected = prometheus.NewGauge(
+        prometheus.GaugeOpts{
+            Name: "karpenter_bizflycloud_underutilized_nodes",
+            Help: "Number of underutilized nodes detected",
+        },
+    )
+
+    nodeCreationMutex sync.Mutex
+    lastNodeCreation  time.Time
+    minCreationInterval = 180 * time.Second
 )
 
+// Update your init() function to register these metrics
 func init() {
-	// Create a new registry for provider-specific metrics
-	providerRegistry := prometheus.NewRegistry()
-
-	// Register metrics with the provider registry
-	providerRegistry.MustRegister(
-		instanceCreationDuration,
-		instanceDeletionDuration,
-		apiErrors,
-	)
-
-	// Register the provider registry with the global registry
-	metrics.Registry.MustRegister(providerRegistry)
+    providerRegistry := prometheus.NewRegistry()
+    providerRegistry.MustRegister(
+        instanceCreationDuration,
+        instanceDeletionDuration,
+        driftCheckDuration,
+        apiErrors,
+        nodeConsolidationEvents,      // Add this
+        nodeTerminationDuration,      // Add this
+        underutilizedNodesDetected,   // Add this
+    )
+    metrics.Registry.MustRegister(providerRegistry)
 }
+
 
 // CloudProvider implements the CloudProvider interface for BizFly Cloud
 type CloudProvider struct {
@@ -207,8 +250,23 @@ func (p *CloudProvider) GetSupportedNodeClasses() []status.Object {
 }
 
 // Create implements cloudprovider.CloudProvider
-// Create implements cloudprovider.CloudProvider
 func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v1.NodeClaim, error) {
+
+    nodeCreationMutex.Lock()
+    timeSinceLastCreation := time.Since(lastNodeCreation)
+    if timeSinceLastCreation < minCreationInterval {
+        sleepTime := minCreationInterval - timeSinceLastCreation
+        p.log.Info("Throttling node creation",
+            "name", nodeClaim.Name,
+            "sleepTime", sleepTime,
+            "timeSinceLastCreation", timeSinceLastCreation)
+        nodeCreationMutex.Unlock()
+        time.Sleep(sleepTime)
+        nodeCreationMutex.Lock()
+    }
+    lastNodeCreation = time.Now()
+    nodeCreationMutex.Unlock()
+
 	p.log.V(1).Info("Creating node claim",
 		"name", nodeClaim.Name,
 		"labels", nodeClaim.Labels,
@@ -247,7 +305,7 @@ func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v
 	node := &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        nodeClaim.Name,
-			Labels:      nodeClaim.Labels,  // Use the updated labels
+			Labels:      nodeClaim.Labels,
 			Annotations: nodeClaim.Annotations,
 		},
 		Spec: corev1.NodeSpec{
@@ -277,35 +335,85 @@ func (p *CloudProvider) Create(ctx context.Context, nodeClaim *v1.NodeClaim) (*v
 	return nodeClaim, nil
 }
 
-// Delete deletes an instance from BizFly Cloud
+// Delete deletes a NodeClaim from BizFly Cloud
 func (p *CloudProvider) Delete(ctx context.Context, nodeClaim *v1.NodeClaim) error {
-	p.log.V(1).Info("Deleting node claim",
-		"name", nodeClaim.Name,
-		"providerID", nodeClaim.Status.ProviderID)
+    start := time.Now()
+    defer func() {
+        nodeTerminationDuration.Observe(time.Since(start).Seconds())
+    }()
 
-	// Convert NodeClaim to Node
-	node := &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: nodeClaim.Name,
-		},
-		Spec: corev1.NodeSpec{
-			ProviderID: nodeClaim.Status.ProviderID,
-		},
-	}
+    p.log.Info("Deleting node claim for scale-down",
+        "name", nodeClaim.Name,
+        "providerID", nodeClaim.Status.ProviderID,
+        "finalizers", nodeClaim.Finalizers,
+        "deletionTimestamp", nodeClaim.DeletionTimestamp)
 
-	err := p.DeleteNode(ctx, node)
-	if err != nil {
-		p.log.Error(err, "Failed to delete node",
-			"name", nodeClaim.Name,
-			"providerID", nodeClaim.Status.ProviderID)
-		return err
-	}
+    // Delete cloud resources first
+    providerID := nodeClaim.Status.ProviderID
+    if providerID != "" {
+        instanceID := strings.TrimPrefix(providerID, ProviderIDPrefix)
+        if instanceID == providerID {
+            return fmt.Errorf("invalid provider ID format: %s", providerID)
+        }
 
-	p.log.Info("Successfully deleted node claim",
-		"name", nodeClaim.Name,
-		"providerID", nodeClaim.Status.ProviderID)
+        instanceProvider := &instance.Provider{
+            Client:       p.kubeClient,
+            Log:          p.log,
+            BizflyClient: p.bizflyClient,
+            Region:       p.region,
+            Config:       p.config,
+        }
+        
+        err := instanceProvider.DeleteInstance(ctx, instanceID)
+        if err != nil {
+            if strings.Contains(err.Error(), "not found") || 
+               strings.Contains(err.Error(), "does not exist") ||
+               strings.Contains(err.Error(), "404") {
+                p.log.Info("Instance already deleted in cloud provider", 
+                    "name", nodeClaim.Name, 
+                    "instanceID", instanceID)
+            } else {
+                apiErrors.WithLabelValues("delete_instance").Inc()
+                return fmt.Errorf("failed to delete instance %s: %w", instanceID, err)
+            }
+        }
+    }
 
-	return nil
+    // WORKAROUND: Explicitly remove Karpenter finalizers if they're stuck
+    if nodeClaim.DeletionTimestamp != nil && 
+       time.Since(nodeClaim.DeletionTimestamp.Time) > 5*time.Minute {
+        
+        p.log.Info("NodeClaim has been terminating for too long, removing finalizers",
+            "name", nodeClaim.Name,
+            "terminatingFor", time.Since(nodeClaim.DeletionTimestamp.Time))
+        
+        // Remove Karpenter finalizers
+        var newFinalizers []string
+        for _, finalizer := range nodeClaim.Finalizers {
+            if !strings.Contains(finalizer, "karpenter.sh") {
+                newFinalizers = append(newFinalizers, finalizer)
+            }
+        }
+        
+        if len(newFinalizers) != len(nodeClaim.Finalizers) {
+            nodeClaim.Finalizers = newFinalizers
+            if err := p.kubeClient.Update(ctx, nodeClaim); err != nil {
+                p.log.Error(err, "Failed to remove stuck finalizers", 
+                    "name", nodeClaim.Name)
+                // Don't return error - let Karpenter retry
+            } else {
+                p.log.Info("Removed stuck finalizers from NodeClaim", 
+                    "name", nodeClaim.Name,
+                    "remainingFinalizers", len(newFinalizers))
+            }
+        }
+    }
+
+    p.log.Info("Successfully deleted cloud resources for node claim",
+        "name", nodeClaim.Name,
+        "duration", time.Since(start))
+
+    return nil
 }
 
 // List returns all instances managed by this provider
@@ -423,8 +531,18 @@ func (p *CloudProvider) CreateNode(ctx context.Context, nodeSpec *corev1.Node) (
     }
 
     // Convert the instance to a node
-    node := instanceProvider.ConvertToNode(instanceObj, isSpot)
-
+	node := instanceProvider.ConvertToNode(instanceObj, isSpot)
+	node.Status.Phase = corev1.NodeRunning
+	node.Status.Conditions = []corev1.NodeCondition{
+		{
+			Type:               corev1.NodeReady,
+			Status:             corev1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "KubeletReady",
+			Message:            "kubelet is posting ready status",
+		},
+	}
+	
     // Copy over any other labels from the nodeSpec
     for key, value := range nodeSpec.Labels {
         if _, exists := node.Labels[key]; !exists {
@@ -732,34 +850,137 @@ func (p *CloudProvider) Get(ctx context.Context, id string) (*v1.NodeClaim, erro
 	return nodeClaim, nil
 }
 
-func (c *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *v1.NodeClaim) (cloudprovider.DriftReason, error) {
-	// Not needed when GetInstanceTypes removes nodepool dependency
-	nodePoolName, ok := nodeClaim.Labels[v1.NodePoolLabelKey]
-	if !ok {
-		return "", nil
-	}
-	nodePool := &v1.NodePool{}
-	if err := c.kubeClient.Get(ctx, types.NamespacedName{Name: nodePoolName}, nodePool); err != nil {
-		return "", client.IgnoreNotFound(err)
-	}
-	if nodePool.Spec.Template.Spec.NodeClassRef == nil {
-		return "", nil
-	}
-	nodeClass, err := c.resolveNodeClassFromNodePool(ctx, nodePool)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// We can't determine the drift status for the NodeClaim if we can no longer resolve the NodeClass
-			// p.recorder.Publish(cloudproviderevents.NodePoolFailedToResolveNodeClass(nodePool))
-			return "", nil
-		}
-		return "", fmt.Errorf("resolving node class, %w", err)
-	}
-	driftReason, err := c.isNodeClassDrifted(ctx, nodeClaim, nodePool, nodeClass)
-	if err != nil {
-		return "", err
-	}
-	return driftReason, nil
+func (p *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *v1.NodeClaim) (cloudprovider.DriftReason, error) {
+    start := time.Now()
+    defer func() {
+        driftCheckDuration.Observe(time.Since(start).Seconds())
+    }()
+
+    p.log.V(1).Info("Checking if node claim is drifted",
+        "name", nodeClaim.Name,
+        "providerID", nodeClaim.Status.ProviderID)
+
+    // Check if the node claim has a provider ID
+    if nodeClaim.Status.ProviderID == "" {
+        p.log.V(1).Info("NodeClaim has no provider ID, considering it drifted",
+            "name", nodeClaim.Name)
+        return cloudprovider.DriftReason(DriftReasonNodeNotFound), nil
+    }
+
+    // Extract instance ID and check if instance exists
+    instanceID := strings.TrimPrefix(nodeClaim.Status.ProviderID, ProviderIDPrefix)
+    instanceProvider := &instance.Provider{
+        Client:       p.kubeClient,
+        Log:          p.log,
+        BizflyClient: p.bizflyClient,
+        Region:       p.region,
+        Config:       p.config,
+    }
+    
+    inst, err := instanceProvider.GetInstance(ctx, instanceID)
+    if err != nil {
+        if strings.Contains(err.Error(), "not found") {
+            p.log.Info("Instance not found, node is drifted",
+                "name", nodeClaim.Name,
+                "instanceID", instanceID)
+            return cloudprovider.DriftReason(DriftReasonNodeNotFound), nil
+        }
+        return "", err
+    }
+
+    // Check instance state for drift
+    switch inst.Status {
+    case "ERROR", "DELETED", "SHUTOFF", "SUSPENDED":
+        p.log.Info("Instance in terminal state, node is drifted",
+            "name", nodeClaim.Name,
+            "instanceID", instanceID,
+            "status", inst.Status)
+        return cloudprovider.DriftReason(DriftReasonInstanceNotFound), nil
+    }
+
+    // Get NodeClass for drift comparison
+    nodeClassRef := nodeClaim.Labels["karpenter.bizflycloud.com/bizflycloudnodeclass"]
+    if nodeClassRef == "" {
+        p.log.V(1).Info("No NodeClass reference found", "name", nodeClaim.Name)
+        return "", nil
+    }
+
+    nodeClass := &v1bizfly.BizflyCloudNodeClass{}
+    if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: nodeClassRef}, nodeClass); err != nil {
+        p.log.Error(err, "Failed to get NodeClass", "name", nodeClassRef)
+        return "", nil // Don't fail drift check if NodeClass is missing
+    }
+
+    // Check for NodeClass configuration drift
+    if p.hasConfigurationDrift(inst, nodeClass, nodeClaim) {
+        p.log.Info("NodeClass configuration drift detected",
+            "name", nodeClaim.Name,
+            "instanceID", instanceID)
+        return cloudprovider.DriftReason(DriftReasonNodeClassDrifted), nil
+    }
+
+    // Check for instance type drift (for consolidation)
+    if p.hasInstanceTypeDrift(inst, nodeClaim) {
+        p.log.Info("Instance type drift detected for consolidation",
+            "name", nodeClaim.Name,
+            "instanceID", instanceID)
+        return cloudprovider.DriftReason("ConsolidationCandidate"), nil
+    }
+
+    p.log.V(1).Info("NodeClaim is not drifted", "name", nodeClaim.Name)
+    return "", nil
 }
+
+
+
+func (p *CloudProvider) isNodeClassDrifted(ctx context.Context, nodeClaim *v1.NodeClaim, nodePool *v1.NodePool, nodeClass *v1bizfly.BizflyCloudNodeClass) (cloudprovider.DriftReason, error) {
+    // Extract instance ID from provider ID
+    if nodeClaim.Status.ProviderID == "" {
+        return DriftReasonNodeNotFound, nil
+    }
+
+    instanceID := strings.TrimPrefix(nodeClaim.Status.ProviderID, ProviderIDPrefix)
+    if instanceID == nodeClaim.Status.ProviderID {
+        return "", fmt.Errorf("invalid provider ID format: %s", nodeClaim.Status.ProviderID)
+    }
+
+    // Get the instance
+    instanceProvider := &instance.Provider{
+        Client:       p.kubeClient,
+        Log:          p.log,
+        BizflyClient: p.bizflyClient,
+        Region:       p.region,
+        Config:       p.config,
+    }
+    
+    inst, err := instanceProvider.GetInstance(ctx, instanceID)
+    if err != nil {
+        if strings.Contains(err.Error(), "not found") {
+            return DriftReasonNodeNotFound, nil
+        }
+        return "", err
+    }
+
+    // Check if instance configuration matches NodeClass requirements
+    if nodeClass.Spec.ImageID != "" && inst.Tags != nil {
+        // Check image ID in instance metadata/tags
+        for _, tag := range inst.Tags {
+            if strings.HasPrefix(tag, "image_id=") && !strings.Contains(tag, nodeClass.Spec.ImageID) {
+                return DriftReasonNodeClassDrifted, nil
+            }
+        }
+    }
+
+    // Check instance state
+    switch inst.Status {
+    case "ERROR", "DELETED", "SHUTOFF":
+        return DriftReasonNodeNotFound, nil
+    }
+
+    return "", nil
+}
+
+
 
 // Name returns the name of the provider
 func (p *CloudProvider) Name() string {
@@ -827,4 +1048,129 @@ func (p *CloudProvider) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v1.No
             Taints:       nodeSpec.Spec.Taints,
         },
     }
+}
+
+// In your cloudprovider.go, add this helper
+func (p *CloudProvider) isRetryableError(err error) bool {
+    if err == nil {
+        return false
+    }
+    
+    // Don't retry for "not found" errors
+    if strings.Contains(err.Error(), "not found") || 
+       strings.Contains(err.Error(), "does not exist") ||
+       strings.Contains(err.Error(), "404") {
+        return false
+    }
+    
+    // Retry for network errors, rate limits, etc.
+    return strings.Contains(err.Error(), "timeout") ||
+           strings.Contains(err.Error(), "rate limit") ||
+           strings.Contains(err.Error(), "connection") ||
+           strings.Contains(err.Error(), "temporary")
+
+}
+
+// hasConfigurationDrift checks if the instance configuration differs from NodeClass
+func (p *CloudProvider) hasConfigurationDrift(inst *instance.Instance, nodeClass *v1bizfly.BizflyCloudNodeClass, nodeClaim *v1.NodeClaim) bool {
+    // Check image drift
+    if nodeClass.Spec.ImageID != "" {
+        currentImageID := p.extractImageIDFromInstance(inst)
+        if currentImageID != "" && currentImageID != nodeClass.Spec.ImageID {
+            p.log.Info("Image drift detected",
+                "current", currentImageID,
+                "expected", nodeClass.Spec.ImageID)
+            return true
+        }
+    }
+
+    // Check disk type drift
+    if nodeClass.Spec.DiskType != "" {
+        currentDiskType := p.extractDiskTypeFromInstance(inst)
+        if currentDiskType != "" && currentDiskType != nodeClass.Spec.DiskType {
+            p.log.Info("Disk type drift detected",
+                "current", currentDiskType,
+                "expected", nodeClass.Spec.DiskType)
+            return true
+        }
+    }
+
+    // Check VPC network drift
+    if len(nodeClass.Spec.VPCNetworkIDs) > 0 {
+        currentNetworkID := p.extractNetworkIDFromInstance(inst)
+        expectedNetworkID := nodeClass.Spec.VPCNetworkIDs[0]
+        if currentNetworkID != "" && currentNetworkID != expectedNetworkID {
+            p.log.Info("VPC network drift detected",
+                "current", currentNetworkID,
+                "expected", expectedNetworkID)
+            return true
+        }
+    }
+
+    return false
+}
+
+// hasInstanceTypeDrift checks if a smaller/cheaper instance could be used
+func (p *CloudProvider) hasInstanceTypeDrift(inst *instance.Instance, nodeClaim *v1.NodeClaim) bool {
+    // This is where you'd implement consolidation logic
+    // For now, we'll check if the instance has been underutilized
+    
+    // Check if instance is significantly oversized for current workload
+    // This would require integration with metrics to determine actual usage
+    // For simplicity, we'll check instance age and type patterns
+    
+    instanceAge := time.Since(inst.CreatedAt)
+    
+    // If instance is old and large, it might be a consolidation candidate
+    if instanceAge > 30*time.Minute && p.isLargeInstance(inst.Flavor) {
+        p.log.V(1).Info("Large instance detected as potential consolidation candidate",
+            "flavor", inst.Flavor,
+            "age", instanceAge)
+        return true
+    }
+    
+    return false
+}
+
+// Helper methods for extracting instance metadata
+func (p *CloudProvider) extractImageIDFromInstance(inst *instance.Instance) string {
+    for _, tag := range inst.Tags {
+        if strings.HasPrefix(tag, "image_id=") {
+            return strings.TrimPrefix(tag, "image_id=")
+        }
+    }
+    return ""
+}
+
+func (p *CloudProvider) extractDiskTypeFromInstance(inst *instance.Instance) string {
+    for _, tag := range inst.Tags {
+        if strings.HasPrefix(tag, "disk_type=") {
+            return strings.TrimPrefix(tag, "disk_type=")
+        }
+    }
+    return ""
+}
+
+func (p *CloudProvider) extractNetworkIDFromInstance(inst *instance.Instance) string {
+    for _, tag := range inst.Tags {
+        if strings.HasPrefix(tag, "bke_node_network_id=") {
+            return strings.TrimPrefix(tag, "bke_node_network_id=")
+        }
+    }
+    return ""
+}
+
+func (p *CloudProvider) isLargeInstance(flavor string) bool {
+    // Define what constitutes a "large" instance for consolidation
+    largeInstancePatterns := []string{
+        "12c_", "16c_", "24c_", "32c_",  // High CPU instances
+        "_16g", "_24g", "_32g", "_64g",  // High memory instances
+    }
+    
+    for _, pattern := range largeInstancePatterns {
+        if strings.Contains(flavor, pattern) {
+            return true
+        }
+    }
+    return false
 }

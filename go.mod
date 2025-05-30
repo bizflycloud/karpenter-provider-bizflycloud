@@ -3,10 +3,9 @@ module github.com/bizflycloud/karpenter-provider-bizflycloud
 go 1.24.2
 
 require (
-	github.com/bizflycloud/gobizfly v1.1.19
+	github.com/bizflycloud/gobizfly v1.1.21
 	github.com/go-logr/logr v1.4.2
 	github.com/prometheus/client_golang v1.22.0
-	github.com/samber/lo v1.49.1
 	k8s.io/api v0.32.3
 	k8s.io/apimachinery v0.32.3
 	k8s.io/client-go v0.32.3
@@ -15,7 +14,7 @@ require (
 )
 
 require (
-	github.com/awslabs/operatorpkg v0.0.0-20250320000002-b05af0f15c68 // indirect
+	github.com/awslabs/operatorpkg v0.0.0-20250320000002-b05af0f15c68
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
@@ -25,7 +24,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/spf13/cobra v1.8.1 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/multierr v1.11.0
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/sync v0.13.0 // indirect
 	gomodules.xyz/jsonpatch/v2 v2.4.0 // indirect
@@ -60,6 +59,7 @@ require (
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.62.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/samber/lo v1.49.1 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	golang.org/x/net v0.37.0 // indirect
 	golang.org/x/oauth2 v0.24.0 // indirect

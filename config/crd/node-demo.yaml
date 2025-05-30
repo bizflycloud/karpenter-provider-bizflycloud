@@ -3,19 +3,14 @@ kind: BizflyCloudNodeClass
 metadata:
   name: default
 spec:
-  region: HN
-  zone: HN2
   template: "Ubuntu 20.04.4 LTS"
-  metadataOptions:
-    type: template
-  tags:
-    - "karpenter-managed=true"
-  # placementStrategy:
-  #   spread:
-  #     zones:
-  #       - HN1
-  # securityGroups:
-  #   - securityGroupID: "default-security-group"
+  imageId: "5a821700-a184-4f91-8455-205d47d472c0"
+  diskType: "SSD"
+  rootDiskSize: 40
+  vpcNetworkIds:
+    - "e84362d6-0632-4950-87ac-e7bc7d74be6d"
+  region: "HN"
+  zone: "HN2"
 ---
 apiVersion: karpenter.sh/v1
 kind: NodePool
