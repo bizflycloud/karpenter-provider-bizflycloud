@@ -50,13 +50,29 @@ manifests: ## Generate CRDs and RBAC.
 
 ##@ Build
 
+.PHONY: fmt
+fmt: ## Run go fmt against code.
+	go fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet against code.
+	go vet ./...
+
+.PHONY: lint
+lint: ## Run golangci-lint against code.
+	golangci-lint run
+
+.PHONY: test
+test: fmt vet ## Run tests.
+	go test ./... -v
+
 .PHONY: build
 build: fmt vet ## Build manager binary.
-	go build $(LDFLAGS) -o bin/karpenter-provider-bizflycloud cmd/karpenter-provider-bizflycloud/main.go
+	go build $(LDFLAGS) -o bin/karpenter-provider-bizflycloud cmd/controller/main.go
 
 .PHONY: run
 run: fmt vet ## Run from your host.
-	go run $(LDFLAGS) ./cmd/karpenter-provider-bizflycloud/main.go
+	go run $(LDFLAGS) ./cmd/controller/main.go
 
 .PHONY: docker-build
 docker-build: ## Build docker image with the manager.

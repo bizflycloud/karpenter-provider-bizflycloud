@@ -2,30 +2,15 @@ package operator
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/bizflycloud/gobizfly"
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/internal/logging"
 	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/client"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype"
-	"github.com/go-logr/logr"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	coreoperator "sigs.k8s.io/karpenter/pkg/operator"
-)
-
-const (
-	bizflyCloudAuthMethod      = "BIZFLY_CLOUD_AUTH_METHOD"
-	bizflyCloudEmailEnvName    = "BIZFLY_CLOUD_EMAIL"
-	bizflyCloudPasswordEnvName = "BIZFLY_CLOUD_PASSWORD"
-	bizflyCloudRegionEnvName   = "BIZFLY_CLOUD_REGION"
-	bizflyCloudAppCredID       = "BIZFLY_CLOUD_APP_CRED_ID"
-	bizflyCloudAppCredSecret   = "BIZFLY_CLOUD_APP_CRED_SECRET"
-	bizflyCloudApiUrl          = "BIZFLY_CLOUD_API_URL"
-	bizflyCloudTenantID        = "BIZFLY_CLOUD_TENANT_ID"
-	defaultRegion              = "HN"
-	defaultApiUrl              = "https://manage.bizflycloud.vn"
-	authPassword               = "password"
-	authAppCred                = "application_credential"
 )
 
 // Operator is the main operator struct that holds all the necessary components
@@ -34,132 +19,64 @@ type Operator struct {
 	Client           *gobizfly.Client
 	InstanceProvider instancetype.Provider
 	Config           *v1.ProviderConfig
-	Log              *logr.Logger
+	Log              *logging.Logger
 	Region           string
 }
 
 // NewOperator creates a new operator instance with all necessary components
-// NewOperator creates a new operator instance with all necessary components
 func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.Context, *Operator) {
-	// Initialize log
-	log := log.FromContext(ctx)
+	// Initialize log from context
+	baseLog := log.FromContext(ctx)
+	log := &logging.Logger{Logger: baseLog}
+
+	// Load configuration from environment
+	config := loadConfigFromEnv()
 
 	// Initialize Bizfly client
-	client, err := newBizflyClient()
+	clientConfig := client.LoadConfigFromEnv()
+	bizflyClient, err := client.NewBizflyClient(clientConfig, baseLog)
 	if err != nil {
-		log.Error(err, "failed to create Bizfly client")
+		log.ErrorWithDetails(err, "Failed to create Bizfly client")
 		os.Exit(1)
 	}
 
-	// Initialize instance type provider - FIXED: Pass both client and logger
-	instanceProvider := instancetype.NewDefaultProvider(client, log)
-
-	// Initialize provider config
-	config := &v1.ProviderConfig{}
+	// Initialize instance type provider
+	instanceProvider := instancetype.NewDefaultProvider(bizflyClient, baseLog)
 
 	return ctx, &Operator{
 		Operator:         operator,
-		Client:           client,
+		Client:           bizflyClient,
 		InstanceProvider: instanceProvider,
 		Config:           config,
-		Log:              &log,
-		Region:           getRegion(),
+		Log:              log,
+		Region:           clientConfig.Region,
 	}
 }
 
-
-// newBizflyClient creates a new Bizfly Cloud client with proper authentication
-func newBizflyClient() (*gobizfly.Client, error) {
-	authMethod := getAuthMethod()
-	username := getUsername()
-	password := getPassword()
-	appCredId := getAppCredId()
-	appCredSecret := getAppCredSecret()
-	apiUrl := getApiUrl()
-	tenantId := getTenantId()
-	region := getRegion()
-
-	switch authMethod {
-	case authPassword:
-		if username == "" {
-			return nil, fmt.Errorf("you have to provide username variable")
-		}
-		if password == "" {
-			return nil, fmt.Errorf("you have to provide password variable")
-		}
-	case authAppCred:
-		if appCredId == "" {
-			return nil, fmt.Errorf("you have to provide application credential ID")
-		}
-		if appCredSecret == "" {
-			return nil, fmt.Errorf("you have to provide application credential secret")
-		}
-	}
-
+// loadConfigFromEnv loads the provider configuration from environment variables
+func loadConfigFromEnv() *v1.ProviderConfig {
+	region := os.Getenv("BIZFLY_CLOUD_REGION")
 	if region == "" {
-		region = defaultRegion
+		region = "HN"
 	}
 
-	if apiUrl == "" {
-		apiUrl = defaultApiUrl
+	zone := os.Getenv("BIZFLY_CLOUD_ZONE")
+	if zone == "" {
+		zone = "HN1"
 	}
 
-	bizflyClient, err := gobizfly.NewClient(
-		gobizfly.WithAPIURL(apiUrl),
-		gobizfly.WithProjectID(tenantId),
-		gobizfly.WithRegionName(region),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create BizFly Cloud Client: %w", err)
+	imageID := os.Getenv("BIZFLY_CLOUD_IMAGE_ID")
+	if imageID == "" {
+		imageID = "5a821700-a184-4f91-8455-205d47d472c0" // Default Ubuntu image
 	}
 
-	token, err := bizflyClient.Token.Init(
-		context.Background(),
-		&gobizfly.TokenCreateRequest{
-			AuthMethod:    authMethod,
-			Username:      username,
-			Password:      password,
-			AppCredID:     appCredId,
-			AppCredSecret: appCredSecret,
+	return &v1.ProviderConfig{
+		Spec: v1.ProviderConfigSpec{
+			Region: region,
+			Zone:   zone,
+			ImageConfig: &v1.ImageConfigSpec{
+				ImageID: imageID,
+			},
 		},
-	)
-	if err != nil {
-		return nil, fmt.Errorf("cannot create token: %w", err)
 	}
-
-	bizflyClient.SetKeystoneToken(token)
-
-	return bizflyClient, nil
-}
-
-func getRegion() string {
-	return os.Getenv(bizflyCloudRegionEnvName)
-}
-
-func getApiUrl() string {
-	return os.Getenv(bizflyCloudApiUrl)
-}
-
-func getTenantId() string {
-	return os.Getenv(bizflyCloudTenantID)
-}
-
-func getAppCredId() string {
-	return os.Getenv(bizflyCloudAppCredID)
-}
-
-func getAppCredSecret() string {
-	return os.Getenv(bizflyCloudAppCredSecret)
-}
-
-func getAuthMethod() string {
-	return os.Getenv(bizflyCloudAuthMethod)
-}
-
-func getUsername() string {
-	return os.Getenv(bizflyCloudEmailEnvName)
-}
-
-func getPassword() string {
-	return os.Getenv(bizflyCloudPasswordEnvName)
 }
