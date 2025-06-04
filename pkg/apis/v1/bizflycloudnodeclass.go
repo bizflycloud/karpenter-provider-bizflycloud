@@ -42,6 +42,16 @@ type BizflyCloudNodeClassSpec struct {
 	// ImageID is the ID of the image to use for nodes
 	// +optional
 	ImageID string `json:"imageId,omitempty"`
+	// SSHKeyName is the name of the SSH key pair to use for instances
+	// +optional
+	// ImageMapping maps Kubernetes versions to image IDs
+	// +optional
+	ImageMapping map[string]string `json:"imageMapping,omitempty"`
+	SSHKeyName string `json:"sshKeyName,omitempty"`
+
+	// SSHKeys is a list of SSH public keys to inject into instances
+	// +optional
+	SSHKeys []string `json:"sshKeys,omitempty"`
 
 	// DiskType specifies the type of disk to use (SSD, HDD)
 	// +kubebuilder:validation:Enum=SSD;HDD
@@ -55,7 +65,11 @@ type BizflyCloudNodeClassSpec struct {
 	// +kubebuilder:default=40
 	// +optional
 	RootDiskSize int `json:"rootDiskSize,omitempty"`
-
+	// NetworkPlan specifies the network plan for the instances
+	// +kubebuilder:validation:Enum=free_datatransfer;paid_datatransfer
+	// +kubebuilder:default="free_datatransfer"
+	// +optional
+	NetworkPlan string `json:"networkPlan,omitempty"`
 	// VPCNetworkIDs is the list of VPC network IDs to attach to the nodes
 	// +optional
 	VPCNetworkIDs []string `json:"vpcNetworkIds,omitempty"`

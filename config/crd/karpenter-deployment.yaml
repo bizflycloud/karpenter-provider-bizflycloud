@@ -20,8 +20,10 @@ spec:
       serviceAccountName: karpenter
       containers:
       - name: karpenter
-        image: fevirtus/karpenter-provider-bizflycloud:latest
+        image: cr-hn-1.bizflycloud.vn/cecd854937c8421b81d1d73789acad52/karpenter:v1.2.6
         env:
+        - name: KARPENTER_LOG_LEVEL
+          value: debug
         - name: KARPENTER_CLOUD_PROVIDER
           value: bizflycloud
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG
@@ -87,3 +89,21 @@ spec:
             secretKeyRef:
               name: bizflycloud-credentials
               key: tenant-id
+        # BKE Cluster configuration
+        - name: BKE_CLUSTER_ID
+          value: "letbvcssxzusv4eg"
+        - name: BKE_CLUSTER_TOKEN
+          value: "KgrtTbXkdCe9awWE6DDV2Rm4ENo6jPTY"
+        - name: BKE_JOIN_ENDPOINT
+          value: "http://engine.api.k8saas.bizflycloud.vn/engine/cluster_join/letbvcssxzusv4eg"
+        - name: BKE_LOG_ENDPOINT
+          value: "http://engine.api.k8saas.bizflycloud.vn/engine/cluster_log/letbvcssxzusv4eg"
+        # Additional configuration
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_ZONE
+          value: "HN1"
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_ENABLED
+          value: "true"
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_RECONCILE_INTERVAL
+          value: "5m"
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_AUTO_REMEDIATE
+          value: "true"

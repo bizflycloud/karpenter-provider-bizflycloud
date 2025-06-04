@@ -7,6 +7,10 @@ import (
 	"strings"
 	"time"
 
+    "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+
 	"github.com/bizflycloud/gobizfly"
 	"github.com/go-logr/logr"
 	v1bizfly "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
@@ -29,6 +33,8 @@ type Manager struct {
 	BizflyClient *gobizfly.Client
 	Region       string
 	Config       *v1bizfly.ProviderConfig
+	kubernetesVersion string
+	versionFetched    bool
 }
 
 // NewManager creates a new instance lifecycle manager
@@ -58,55 +64,52 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 	}
 
 	// Get configuration from NodeClass or use defaults
-	imageID := "5a821700-a184-4f91-8455-205d47d472c0"
-	if nodeClass != nil && nodeClass.Spec.ImageID != "" {
-		imageID = nodeClass.Spec.ImageID
+	imageID, err := m.resolveImageID(nodeClaim, nodeClass)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve image ID: %w", err)
 	}
-
-	diskType := "SSD"
-	if nodeClass != nil && nodeClass.Spec.DiskType != "" {
-		diskType = nodeClass.Spec.DiskType
-	}
-
-	rootDiskSize := 40
-	if nodeClass != nil && nodeClass.Spec.RootDiskSize > 0 {
-		rootDiskSize = nodeClass.Spec.RootDiskSize
-	}
-
-	vpcNetworkIDs := []string{"e84362d6-0632-4950-87ac-e7bc7d74be6d"}
-	if nodeClass != nil && len(nodeClass.Spec.VPCNetworkIDs) > 0 {
-		vpcNetworkIDs = nodeClass.Spec.VPCNetworkIDs
-	}
+	diskType := nodeClass.Spec.DiskType
+	rootDiskSize := nodeClass.Spec.RootDiskSize
+	vpcNetworkIDs := nodeClass.Spec.VPCNetworkIDs
 
 	// Get availability zone
-	zone := "HN2"
-	for _, req := range nodeClaim.Spec.Requirements {
-		if req.Key == corev1.LabelTopologyZone && len(req.Values) > 0 {
-			zone = req.Values[0]
-			break
+	zone := nodeClass.Spec.Zone
+	if zone == "" {
+		// Fallback to requirements if not specified in NodeClass
+		for _, req := range nodeClaim.Spec.Requirements {
+			if req.Key == corev1.LabelTopologyZone && len(req.Values) > 0 {
+				zone = req.Values[0]
+				break
+			}
 		}
+	}
+	if zone == "" {
+		return nil, fmt.Errorf("zone must be specified in NodeClass or requirements")
 	}
 
 	nodeName := nodeClaim.Name
 
 	// Determine server type
-	serverType := "premium"
-	if strings.Contains(instanceTypeName, "basic") {
-		serverType = "basic"
-	} else if strings.Contains(instanceTypeName, "enterprise") {
-		serverType = "enterprise"
-	}
-
+	serverType := nodeClass.Spec.NodeCategory
+    if nodeClass.Spec.NetworkPlan == "" {
+        return nil, fmt.Errorf("networkPlan must be specified in NodeClass")
+    }
+    networkPlan := nodeClass.Spec.NetworkPlan
 	// Prepare metadata
 	metadata := m.buildMetadata(nodeClass, vpcNetworkIDs[0])
 	userData := "#!/bin/bash\n/opt/bizfly-kubernetes-engine/bootstrap.sh"
 
+    var sshKey string
+    sshKey = nodeClass.Spec.SSHKeyName
+    
 	m.Log.Info("Creating instance",
 		"name", nodeName,
 		"instanceType", instanceTypeName,
 		"imageID", imageID,
 		"zone", zone,
-		"serverType", serverType)
+		"serverType", serverType,
+		"vpcNetworkIDs", vpcNetworkIDs,
+		"sshKey", sshKey)
 
 	// Create server request
 	opts := &gobizfly.ServerCreateRequest{
@@ -126,9 +129,10 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 			Size: rootDiskSize,
 			Type: utils.StringPtr(diskType),
 		},
+        SSHKey:      sshKey,
 		Password:    true,
 		Quantity:    1,
-		NetworkPlan: "free_datatransfer",
+		NetworkPlan: networkPlan,
 		Firewalls:   []string{},
 	}
 
@@ -248,8 +252,6 @@ func (m *Manager) buildMetadata(nodeClass *v1bizfly.BizflyCloudNodeClass, networ
 		"bke_node_localdns":    "false",
 		"bke_node_network_id":  networkID,
 		"karpenter-managed":    "true",
-		"bke_pool_id":          "682c47eb4af5b281d84ca763",
-		"cluster_id":           "627cc2e6-0449-4c78-96c3-ea66d7479c19",
 	}
 
 	// Add custom metadata from NodeClass
@@ -309,4 +311,67 @@ func (m *Manager) waitForServerCreation(ctx context.Context, taskID string) (str
 			return "", ctx.Err()
 		}
 	}
+}
+
+// resolveImageID determines the image ID to use based on Kubernetes version or explicit configuration
+func (m *Manager) resolveImageID(nodeClaim *karpenterv1.NodeClaim, nodeClass *v1bizfly.BizflyCloudNodeClass) (string, error) {
+	// If explicit imageID is provided in NodeClass, use it
+	if nodeClass != nil && nodeClass.Spec.ImageID != "" {
+		m.Log.Info("Using explicit image ID from NodeClass", "imageID", nodeClass.Spec.ImageID)
+		return nodeClass.Spec.ImageID, nil
+	}
+
+	// If imageMapping is provided, try to resolve from Kubernetes version
+	if nodeClass != nil && len(nodeClass.Spec.ImageMapping) > 0 {
+		// Get Kubernetes version from NodeClaim requirements
+		kubeVersion := m.getKubernetesVersion(nodeClaim)
+		if kubeVersion == "" {
+			return "", fmt.Errorf("kubernetes version not found in NodeClaim requirements, cannot resolve image from mapping")
+		}
+		
+		if imageID, exists := nodeClass.Spec.ImageMapping[kubeVersion]; exists {
+			m.Log.Info("Resolved image ID from version mapping", 
+				"kubeVersion", kubeVersion, 
+				"imageID", imageID)
+			return imageID, nil
+		}
+		return "", fmt.Errorf("no image mapping found for Kubernetes version %s", kubeVersion)
+	}
+
+	// No imageID or imageMapping provided - return error
+	return "", fmt.Errorf("either imageId or imageMapping must be specified in NodeClass")
+}
+
+
+func (m *Manager) getKubernetesVersion(nodeClaim *karpenterv1.NodeClaim) string {
+	if !m.versionFetched {
+		version, err := m.getKubernetesVersionFromAPIServer()
+		if err != nil {
+			m.Log.Error(err, "Failed to get Kubernetes version from API server")
+			return ""
+		}
+		m.kubernetesVersion = version
+		m.versionFetched = true
+		m.Log.Info("Cached Kubernetes version", "version", version)
+	}
+	return m.kubernetesVersion
+}
+
+func (m *Manager) getKubernetesVersionFromAPIServer() (string, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return "", fmt.Errorf("failed to get in-cluster config: %w", err)
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return "", fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	versionInfo, err := clientset.Discovery().ServerVersion()
+	if err != nil {
+		return "", fmt.Errorf("failed to get server version: %w", err)
+	}
+
+	return versionInfo.GitVersion, nil
 }

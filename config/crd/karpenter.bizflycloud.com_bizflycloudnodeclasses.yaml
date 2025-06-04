@@ -32,8 +32,7 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
-        description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass
-          API
+        description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass API
         properties:
           apiVersion:
             description: |-
@@ -64,20 +63,33 @@ spec:
               imageId:
                 description: ImageID is the ID of the image to use for nodes
                 type: string
+              # NEW: Image mapping for Kubernetes versions
+              imageMapping:
+                description: ImageMapping maps Kubernetes versions to image IDs
+                type: object
+                additionalProperties:
+                  type: string
               metadataOptions:
                 default:
                   type: template
-                description: MetadataOptions for the generated launch template of
-                  provisioned nodes.
+                description: MetadataOptions for the generated launch template of provisioned nodes.
                 properties:
                   type:
                     type: string
                 required:
                 - type
                 type: object
+              # NEW: Network plan field
+              networkPlan:
+                description: NetworkPlan specifies the network plan for the instances
+                enum:
+                - free_datatransfer
+                - paid_datatransfer
+                default: free_datatransfer
+                type: string
               nodeCategory:
                 default: basic
-                description: NodeCategory specifies the category of nodes to provision (basic, premium, enterprise, dedicated)
+                description: NodeCategory specifies the category of nodes to provision
                 enum:
                 - basic
                 - premium
@@ -116,6 +128,16 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              # NEW: SSH key name field
+              sshKeyName:
+                description: SSHKeyName is the name of the SSH key pair to use for instances
+                type: string
+              # NEW: SSH keys array field
+              sshKeys:
+                description: SSHKeys is a list of SSH public keys to inject into instances
+                items:
+                  type: string
+                type: array
               tags:
                 description: Tags to apply to the VMs
                 items:
@@ -138,15 +160,12 @@ spec:
             - template
             type: object
           status:
-            description: BizflyCloudNodeClassStatus defines the observed state of
-              BizflyCloudNodeClass
+            description: BizflyCloudNodeClassStatus defines the observed state of BizflyCloudNodeClass
             properties:
               conditions:
-                description: Conditions represents the latest available observations
-                  of the BizflyCloudNodeClass's current state
+                description: Conditions represents the latest available observations of the BizflyCloudNodeClass's current state
                 items:
-                  description: Condition aliases the upstream type and adds additional
-                    helper methods
+                  description: Condition aliases the upstream type and adds additional helper methods
                   properties:
                     lastTransitionTime:
                       description: |-
@@ -170,7 +189,8 @@ spec:
                       type: integer
                     reason:
                       description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.... Producers of specific condition types may define expected values and meanings for this field,
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
                         and whether the values are considered a guaranteed API.
                         The value should be a CamelCase string.
                         This field may not be empty.
@@ -188,7 +208,6 @@ spec:
                     type:
                       description: |-
                         type of condition in CamelCase or in foo.example.com/CamelCase.
-                        ---
                         Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
                         useful (see .node.status.conditions), the ability to deconflict is important.
                         The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
@@ -204,14 +223,12 @@ spec:
                   type: object
                 type: array
               instanceTypes:
-                description: InstanceTypes is the list of instance types discovered
-                  from BizFly Cloud
+                description: InstanceTypes is the list of instance types discovered from BizFly Cloud
                 items:
                   type: string
                 type: array
               lastUpdated:
-                description: LastUpdated is the timestamp of the last update to the
-                  status
+                description: LastUpdated is the timestamp of the last update to the status
                 format: date-time
                 type: string
               regions:
