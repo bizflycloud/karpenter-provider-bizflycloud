@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"sort"
+	"strconv"
+
 
 	"github.com/awslabs/operatorpkg/status"
 	"github.com/bizflycloud/gobizfly"
@@ -53,8 +56,16 @@ const (
 	DriftReasonInstanceNotFound = "InstanceNotFound"
 
 	// Throttling
-	minCreationInterval = 180 * time.Second
+	minCreationInterval = 300 * time.Second
 )
+
+type InstanceTypeSpec struct {
+	Name string
+	CPU  int
+	RAM  int
+	Tier string
+}
+
 
 var (
 	nodeCreationMutex sync.Mutex
@@ -142,15 +153,14 @@ func (p *cloudProviderImpl) Create(ctx context.Context, nodeClaim *v1.NodeClaim)
 		"annotations", nodeClaim.Annotations)
 
 	// Extract instance type from NodeClaim requirements
-	instanceTypeName := p.extractInstanceTypeFromRequirements(nodeClaim.Spec.Requirements)
-	if instanceTypeName == "" {
+	instanceTypeName, err := p.getSmallestInstanceTypeFromRequirements(nodeClaim.Spec.Requirements)
+	if err != nil {
 		return nil, &errors.NodeCreationError{
 			NodeName:   nodeClaim.Name,
-			Underlying: errors.ErrInvalidInstanceType,
+			Underlying: err,
 			Retryable:  false,
 		}
 	}
-
 	// Set required labels
 	p.setRequiredLabels(nodeClaim, instanceTypeName)
 
@@ -764,4 +774,136 @@ func (p *cloudProviderImpl) newTerminatingNodeClassError(name string) *k8serrors
 	err := k8serrors.NewNotFound(qualifiedResource, name)
 	err.ErrStatus.Message = fmt.Sprintf("%s %q is terminating, treating as not found", qualifiedResource.String(), name)
 	return err
+}
+
+func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements []v1.NodeSelectorRequirementWithMinValues) (string, error) {
+	var availableInstanceTypes []string
+	
+	// Extract all available instance types from requirements
+	for _, req := range requirements {
+		if req.Key == corev1.LabelInstanceTypeStable {
+			p.log.Info("Values get from label", "values", req.Values)
+			availableInstanceTypes = append(availableInstanceTypes, req.Values...)
+		}
+	}
+
+	p.log.Info("Available instance types from requirements",
+		"count", len(availableInstanceTypes),
+		"instanceTypes", availableInstanceTypes)
+
+	if len(availableInstanceTypes) == 0 {
+		return "", fmt.Errorf("no instance types found in requirements")
+	}
+
+	// Parse and sort instance types
+	parsedInstances := make([]InstanceTypeSpec, 0, len(availableInstanceTypes))
+	var parseErrors []string
+	
+	for _, instanceType := range availableInstanceTypes {
+		spec, err := p.parseInstanceType(instanceType)
+		if err != nil {
+			p.log.Error(err, "Failed to parse instance type", "instanceType", instanceType)
+			parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", instanceType, err))
+			continue
+		}
+		parsedInstances = append(parsedInstances, spec)
+	}
+
+	if len(parseErrors) > 0 {
+		p.log.Info("Instance type parsing errors",
+			"errorCount", len(parseErrors),
+			"errors", parseErrors)
+	}
+
+	p.log.Info("Successfully parsed instance types",
+		"totalCount", len(parsedInstances),
+		"validCount", len(parsedInstances))
+
+	if len(parsedInstances) == 0 {
+		return "", fmt.Errorf("no valid instance types found after parsing")
+	}
+
+	// Sort by CPU first, then by RAM (ascending order)
+	sort.Slice(parsedInstances, func(i, j int) bool {
+		if parsedInstances[i].CPU == parsedInstances[j].CPU {
+			return parsedInstances[i].RAM < parsedInstances[j].RAM
+		}
+		return parsedInstances[i].CPU < parsedInstances[j].CPU
+	})
+
+	p.log.Info("Sorted instance types (smallest to largest)")
+	for i, spec := range parsedInstances {
+		p.log.V(1).Info("Sorted instance",
+			"rank", i+1,
+			"name", spec.Name,
+			"cpu", spec.CPU,
+			"ram", spec.RAM)
+	}
+
+	smallestInstance := parsedInstances[0]
+	
+	p.log.Info("Selected smallest instance type",
+		"instanceType", smallestInstance.Name,
+		"cpu", smallestInstance.CPU,
+		"ram", smallestInstance.RAM,
+		"totalCandidates", len(parsedInstances),
+		"selectionCriteria", "lowest CPU, then lowest RAM")
+
+	return smallestInstance.Name, nil
+}
+
+// Add the parseInstanceType method if it doesn't exist
+func (p *cloudProviderImpl) parseInstanceType(instanceType string) (InstanceTypeSpec, error) {
+	var cpu, ram int
+	var tier string
+	var err error
+
+	if strings.HasPrefix(instanceType, "nix.") {
+		tier = "premium"
+		remaining := strings.TrimPrefix(instanceType, "nix.")
+		cpu, ram, err = p.parseCpuRam(remaining)
+		if err != nil {
+			return InstanceTypeSpec{}, fmt.Errorf("failed to parse nix format %s: %w", instanceType, err)
+		}
+	} else {
+		parts := strings.Split(instanceType, "_")
+		if len(parts) < 3 {
+			return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format: %s", instanceType)
+		}
+
+		cpu, ram, err = p.parseCpuRam(strings.Join(parts[:2], "_"))
+		if err != nil {
+			return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", instanceType, err)
+		}
+
+		tier = parts[len(parts)-1]
+	}
+
+	return InstanceTypeSpec{
+		Name: instanceType,
+		CPU:  cpu,
+		RAM:  ram,
+		Tier: tier,
+	}, nil
+}
+
+func (p *cloudProviderImpl) parseCpuRam(cpuRamStr string) (int, int, error) {
+	parts := strings.Split(cpuRamStr, "_")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid CPU/RAM format: %s", cpuRamStr)
+	}
+
+	cpuStr := strings.TrimSuffix(parts[0], "c")
+	cpu, err := strconv.Atoi(cpuStr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse CPU from %s: %w", parts[0], err)
+	}
+
+	ramStr := strings.TrimSuffix(parts[1], "g")
+	ram, err := strconv.Atoi(ramStr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse RAM from %s: %w", parts[1], err)
+	}
+
+	return cpu, ram, nil
 }

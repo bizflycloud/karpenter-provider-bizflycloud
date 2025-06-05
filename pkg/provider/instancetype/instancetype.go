@@ -3,7 +3,6 @@ package instancetype
 import (
 	"context"
 	"fmt"
-	"sort"
 
 	"github.com/bizflycloud/gobizfly"
 	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
@@ -13,7 +12,6 @@ import (
 	"sigs.k8s.io/karpenter/pkg/scheduling"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/calculator"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/parser"
-	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/sorter"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/validator"
 )
 
@@ -34,7 +32,6 @@ func NewDefaultProvider(client *gobizfly.Client, log logr.Logger) Provider {
 		parser:     parserObj,
 		calculator: calculator.NewCapacityCalculator(),
 		pricing:    calculator.NewPricingCalculator(),
-		sorter:     sorter.NewSorter(log, parserObj),
 		validator:  validator.NewValidator(log, parserObj),
 	}
 }
@@ -45,14 +42,10 @@ type defaultProvider struct {
 	parser     *parser.Parser
 	calculator *calculator.CapacityCalculator
 	pricing    *calculator.PricingCalculator
-	sorter     *sorter.Sorter
 	validator  *validator.Validator
 }
 
 func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNodeClass) ([]*cloudprovider.InstanceType, error) {
-	d.log.Info("=== STARTING INSTANCE TYPE LISTING ===",
-		"nodeClass", nodeClass.Name,
-		"nodeCategory", nodeClass.Spec.NodeCategory)
 
 	flavors, err := d.client.CloudServer.Flavors().List(ctx)
 	if err != nil {
@@ -157,26 +150,6 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
 		instanceTypes = append(instanceTypes, instanceType)
 	}
 
-	d.sorter.SortInstanceTypesBySize(instanceTypes)
-
-	// Log the sorted order for debugging
-	d.log.Info("=== FINAL SORTED INSTANCE TYPES ===")
-	for i, instanceType := range instanceTypes {
-		cpu, ram := d.parser.ParseInstanceTypeName(instanceType.Name)
-		score := d.sorter.CalculateInstanceScore(cpu, ram)
-		d.log.V(1).Info("Sorted instance type",
-			"index", i,
-			"name", instanceType.Name,
-			"cpu", cpu,
-			"ramMB", ram,
-			"score", score)
-	}
-
-	d.log.Info("=== INSTANCE TYPE LISTING COMPLETE ===",
-		"totalTypes", len(instanceTypes),
-		"smallestFirst", instanceTypes[0].Name,
-		"largestLast", instanceTypes[len(instanceTypes)-1].Name)
-
 	return instanceTypes, nil
 }
 
@@ -208,10 +181,6 @@ func (d *defaultProvider) createOfferings(flavor *validator.FlavorResponse) clou
 			offerings = append(offerings, &offering)
 		}
 	}
-
-	sort.Slice(offerings, func(i, j int) bool {
-		return offerings[i].Price < offerings[j].Price
-	})
 
 	return offerings
 }

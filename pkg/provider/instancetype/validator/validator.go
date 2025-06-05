@@ -36,7 +36,7 @@ func NewValidator(log logr.Logger, parser *parser.Parser) *Validator {
 func (v *Validator) IsInstanceTypeUsable(flavor *FlavorResponse, nodeClass *v1.BizflyCloudNodeClass) bool {
 	// CRITICAL: Exclude VPS flavors entirely
 	if strings.Contains(flavor.Name, "_vps") {
-		v.log.V(1).Info("Excluding VPS flavor",
+		v.log.V(3).Info("Excluding VPS flavor",
 			"name", flavor.Name,
 			"reason", "VPS flavors not allowed")
 		return false
@@ -44,7 +44,7 @@ func (v *Validator) IsInstanceTypeUsable(flavor *FlavorResponse, nodeClass *v1.B
 
 	// Filter out very small instances
 	if flavor.VCPUs < 1 || flavor.RAM < 1024 {
-		v.log.V(1).Info("Excluding instance type - too small",
+		v.log.V(3).Info("Excluding instance type - too small",
 			"name", flavor.Name,
 			"vcpus", flavor.VCPUs,
 			"ram", flavor.RAM)
@@ -56,14 +56,14 @@ func (v *Validator) IsInstanceTypeUsable(flavor *FlavorResponse, nodeClass *v1.B
 		flavorCategory := v.parser.CategorizeFlavor(flavor.Name)
 		requiredCategory := nodeClass.Spec.NodeCategory
 
-		v.log.Info("Checking category filter",
+		v.log.V(3).Info("Checking category filter",
 			"flavorName", flavor.Name,
 			"flavorCategory", flavorCategory,
 			"requiredCategory", requiredCategory,
 			"nodeClass", nodeClass.Name)
 
 		if flavorCategory != requiredCategory {
-			v.log.Info("EXCLUDING instance type - category mismatch",
+			v.log.V(3).Info("EXCLUDING instance type - category mismatch",
 				"name", flavor.Name,
 				"flavorCategory", flavorCategory,
 				"requiredCategory", requiredCategory)
@@ -71,7 +71,7 @@ func (v *Validator) IsInstanceTypeUsable(flavor *FlavorResponse, nodeClass *v1.B
 		}
 	}
 
-	v.log.Info("Instance type is USABLE",
+	v.log.V(3).Info("Instance type is USABLE",
 		"name", flavor.Name,
 		"category", v.parser.CategorizeFlavor(flavor.Name),
 		"vcpus", flavor.VCPUs,

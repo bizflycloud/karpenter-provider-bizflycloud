@@ -1,10 +1,14 @@
 package lifecycle
 
 import (
+
+	"sort"
+	"strconv"
+	"strings"
+
 	"context"
 	"fmt"
 	"os"
-	"strings"
 	"time"
 
     "k8s.io/client-go/kubernetes"
@@ -37,6 +41,13 @@ type Manager struct {
 	versionFetched    bool
 }
 
+type InstanceTypeSpec struct {
+	Name string
+	CPU  int
+	RAM  int
+	Tier string
+}
+
 // NewManager creates a new instance lifecycle manager
 func NewManager(client client.Client, log logr.Logger, bizflyClient *gobizfly.Client, region string, config *v1bizfly.ProviderConfig) *Manager {
 	return &Manager{
@@ -51,16 +62,9 @@ func NewManager(client client.Client, log logr.Logger, bizflyClient *gobizfly.Cl
 // CreateInstance creates a new BizFly Cloud server instance and waits for it to be ready
 func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.NodeClaim, nodeClass *v1bizfly.BizflyCloudNodeClass) (*gobizfly.Server, error) {
 	// Extract instance type
-	instanceTypeName := ""
-	for _, req := range nodeClaim.Spec.Requirements {
-		if req.Key == corev1.LabelInstanceTypeStable && len(req.Values) > 0 {
-			instanceTypeName = req.Values[0]
-			break
-		}
-	}
-
-	if instanceTypeName == "" {
-		return nil, fmt.Errorf("no instance type found in requirements")
+	instanceTypeName, err := m.getSmallestInstanceType(nodeClaim)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select instance type: %w", err)
 	}
 
 	// Get configuration from NodeClass or use defaults
@@ -84,7 +88,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 		}
 	}
 	if zone == "" {
-		return nil, fmt.Errorf("zone must be specified in NodeClass or requirements")
+		return nil, "", "", fmt.Errorf("zone must be specified in NodeClass or requirements")
 	}
 
 	nodeName := nodeClaim.Name
@@ -374,4 +378,169 @@ func (m *Manager) getKubernetesVersionFromAPIServer() (string, error) {
 	}
 
 	return versionInfo.GitVersion, nil
+}
+
+
+func (m *Manager) getSmallestInstanceType(nodeClaim *karpenterv1.NodeClaim) (string, error) {
+	var availableInstanceTypes []string
+	
+	// Extract all available instance types from requirements
+	for _, req := range nodeClaim.Spec.Requirements {
+		if req.Key == corev1.LabelInstanceTypeStable {
+			m.Log.Info("Values get from label", "values", req.Values)
+			availableInstanceTypes = append(availableInstanceTypes, req.Values...)
+		}
+	}
+
+	// Log the raw list of available instance types
+	m.Log.Info("Available instance types from requirements",
+		"count", len(availableInstanceTypes),
+		"instanceTypes", availableInstanceTypes)
+
+	if len(availableInstanceTypes) == 0 {
+		return "", fmt.Errorf("no instance types found in requirements")
+	}
+
+	// Parse and sort instance types
+	parsedInstances := make([]InstanceTypeSpec, 0, len(availableInstanceTypes))
+	var parseErrors []string
+	
+	for _, instanceType := range availableInstanceTypes {
+		spec, err := m.parseInstanceType(instanceType)
+		if err != nil {
+			m.Log.Error(err, "Failed to parse instance type", "instanceType", instanceType)
+			parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", instanceType, err))
+			continue
+		}
+		parsedInstances = append(parsedInstances, spec)
+	}
+
+	// Log parsing results
+	if len(parseErrors) > 0 {
+		m.Log.Info("Instance type parsing errors",
+			"errorCount", len(parseErrors),
+			"errors", parseErrors)
+	}
+
+	// Log all successfully parsed instances with details
+	m.Log.Info("Successfully parsed instance types",
+		"totalCount", len(parsedInstances),
+		"validCount", len(parsedInstances))
+	
+	for i, spec := range parsedInstances {
+		m.Log.V(1).Info("Parsed instance details",
+			"index", i,
+			"name", spec.Name,
+			"cpu", spec.CPU,
+			"ram", spec.RAM,
+			"tier", spec.Tier) // Include tier if you have it
+	}
+
+	if len(parsedInstances) == 0 {
+		return "", fmt.Errorf("no valid instance types found after parsing")
+	}
+
+	// Sort by CPU first, then by RAM (ascending order)
+	sort.Slice(parsedInstances, func(i, j int) bool {
+		if parsedInstances[i].CPU == parsedInstances[j].CPU {
+			return parsedInstances[i].RAM < parsedInstances[j].RAM
+		}
+		return parsedInstances[i].CPU < parsedInstances[j].CPU
+	})
+
+	// Log sorted instances to see the ordering
+	m.Log.Info("Sorted instance types (smallest to largest)")
+	for i, spec := range parsedInstances {
+		m.Log.V(1).Info("Sorted instance",
+			"rank", i+1,
+			"name", spec.Name,
+			"cpu", spec.CPU,
+			"ram", spec.RAM)
+	}
+
+	smallestInstance := parsedInstances[0]
+	
+	// Enhanced logging for the selected smallest instance
+	m.Log.Info("Selected smallest instance type",
+		"instanceType", smallestInstance.Name,
+		"cpu", smallestInstance.CPU,
+		"ram", smallestInstance.RAM,
+		"totalCandidates", len(parsedInstances),
+		"selectionCriteria", "lowest CPU, then lowest RAM")
+
+	// Log comparison with next smallest for context
+	if len(parsedInstances) > 1 {
+		nextSmallest := parsedInstances[1]
+		m.Log.V(1).Info("Next smallest instance for comparison",
+			"instanceType", nextSmallest.Name,
+			"cpu", nextSmallest.CPU,
+			"ram", nextSmallest.RAM)
+	}
+
+	return smallestInstance.Name, nil
+}
+
+
+// parseInstanceType parses instance type string format and extracts tier information
+func (m *Manager) parseInstanceType(instanceType string) (InstanceTypeSpec, error) {
+	var cpu, ram int
+	var tier string
+	var err error
+
+	// Handle different formats
+	if strings.HasPrefix(instanceType, "nix.") {
+		// Format: nix.2c_2g => premium
+		tier = "premium"
+		// Remove "nix." prefix and parse the rest
+		remaining := strings.TrimPrefix(instanceType, "nix.")
+		cpu, ram, err = m.parseCpuRam(remaining)
+		if err != nil {
+			return InstanceTypeSpec{}, fmt.Errorf("failed to parse nix format %s: %w", instanceType, err)
+		}
+	} else {
+		// Standard formats: 2c_2g_basic, 2c_2g_enterprise, 2c_2g_dedicated
+		parts := strings.Split(instanceType, "_")
+		if len(parts) < 3 {
+			return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format: %s", instanceType)
+		}
+
+		// Parse CPU and RAM from first two parts
+		cpu, ram, err = m.parseCpuRam(strings.Join(parts[:2], "_"))
+		if err != nil {
+			return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", instanceType, err)
+		}
+
+		// Extract tier from the last part
+		tier = parts[len(parts)-1]
+	}
+
+	return InstanceTypeSpec{
+		Name: instanceType,
+		CPU:  cpu,
+		RAM:  ram,
+		Tier: tier, // Add this field to your struct
+	}, nil
+}
+
+func (m *Manager) parseCpuRam(cpuRamStr string) (int, int, error) {
+	parts := strings.Split(cpuRamStr, "_")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid CPU/RAM format: %s", cpuRamStr)
+	}
+
+	// Parse CPU (remove 'c' suffix)
+	cpuStr := strings.TrimSuffix(parts[0], "c")
+	cpu, err := strconv.Atoi(cpuStr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse CPU from %s: %w", parts[0], err)
+	}
+
+	// Parse RAM (remove 'g' suffix)
+	ramStr := strings.TrimSuffix(parts[1], "g")
+	ram, err := strconv.Atoi(ramStr)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse RAM from %s: %w", parts[1], err)
+	}
+
+	return cpu, ram, nil
 }
