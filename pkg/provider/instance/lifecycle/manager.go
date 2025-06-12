@@ -269,18 +269,27 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
 	token := os.Getenv("BKE_CLUSTER_TOKEN")
 
 	if clusterID != "" {
-		m.Log.Info("Performing BKE cluster cleanup for node", "instanceID", instanceID, "clusterID", clusterID)
+		m.Log.Info("Performing BKE cluster cleanup for node", "nodeName", nodeName, "clusterID", clusterID)
 
-		leaveReq := &gobizfly.LeaveClusterRequest{
-			node_name: []string{instanceID},
+		// The request struct is `ClusterLeaveRequest` with a `NodeName` field, as per the function signature provided.
+		leaveReq := &gobizfly.ClusterLeaveRequest{
+			NodeName: nodeName,
 		}
 
-	err := m.BizflyClient.KubernetesEngine.LeaveCluster(ctx, clusterID, token, leaveReq)
-	if err != nil {
-		m.Log.Warn("Failed to remove node from BKE cluster; manual cleanup may be required", "error", err.Error(), "nodeName", nodeName)
+		// The correct method is `ClusterLeave`, and it takes the token as a separate parameter.
+		// The second `err` uses `=` instead of `:=` because `err` is already declared in this scope.
+		_, err = m.BizflyClient.KubernetesEngine.ClusterLeave(ctx, clusterID, token, leaveReq)
+		if err != nil {
+			// The `logr.Logger` interface does not have a `Warn` method[2].
+			// We log this as `Info` because it's a non-fatal error; the primary resource is deleted.
+			m.Log.Info("Failed to remove node from BKE cluster (non-fatal, manual cleanup may be required)", "error", err.Error(), "nodeName", nodeName)
+		} else {
+			m.Log.Info("Successfully removed node from BKE cluster", "nodeName", nodeName)
+		}
 	} else {
-		m.Log.Info("Successfully removed node from BKE cluster", "nodeName", nodeName)
-		
+		m.Log.Info("BKE_CLUSTER_ID not set, skipping cluster cleanup.", "instanceID", instanceID)
+	}
+
 	m.Log.Info("Instance deletion process complete", "id", instanceID)
 	return nil
 }
