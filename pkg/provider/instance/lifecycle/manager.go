@@ -238,7 +238,7 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
 	m.Log.Info("Deleting instance", "id", instanceID)
 
 	// First, check if the instance still exists
-	_, err := m.BizflyClient.CloudServer.Get(ctx, instanceID)
+	server, err := m.BizflyClient.CloudServer.Get(ctx, instanceID)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") ||
 			strings.Contains(err.Error(), "does not exist") ||
@@ -249,6 +249,8 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
 		return fmt.Errorf("failed to check instance status: %w", err)
 	}
 
+	nodeName := server.Name
+	m.Log.Info("Retrieved node name from server details", "nodeName", nodeName, "instanceID", instanceID)
 	// Instance exists, proceed with deletion
 	_, err = m.BizflyClient.CloudServer.Delete(ctx, instanceID, nil)
 	if err != nil {
@@ -262,6 +264,24 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
 	}
 
 	m.Log.Info("Server successfully deleted", "id", instanceID)
+
+	clusterID := os.Getenv("BKE_CLUSTER_ID")
+	token := os.Getenv("BKE_CLUSTER_TOKEN")
+
+	if clusterID != "" {
+		m.Log.Info("Performing BKE cluster cleanup for node", "instanceID", instanceID, "clusterID", clusterID)
+
+		leaveReq := &gobizfly.LeaveClusterRequest{
+			node_name: []string{instanceID},
+		}
+
+	err := m.BizflyClient.KubernetesEngine.LeaveCluster(ctx, clusterID, token, leaveReq)
+	if err != nil {
+		m.Log.Warn("Failed to remove node from BKE cluster; manual cleanup may be required", "error", err.Error(), "nodeName", nodeName)
+	} else {
+		m.Log.Info("Successfully removed node from BKE cluster", "nodeName", nodeName)
+		
+	m.Log.Info("Instance deletion process complete", "id", instanceID)
 	return nil
 }
 
