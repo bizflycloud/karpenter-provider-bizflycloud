@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
-IMG ?= fevirtus/karpenter-provider-bizflycloud:latest
+IMG ?= cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
-ENVTEST_K8S_VERSION = 1.24.2
+ENVTEST_K8S_VERSION = 1.32.1
 
 # Obtain the version using git describe, defaulting to 'dev' if git is not available
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
