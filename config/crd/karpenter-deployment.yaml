@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: karpenter
+  namespace: karpenter
+spec:
+  progressDeadlineSeconds: 600
+  replicas: 1
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: karpenter
+      app.kubernetes.io/instance: karpenter
+      app.kubernetes.io/name: karpenter
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: karpenter
+        app.kubernetes.io/instance: karpenter
+        app.kubernetes.io/name: karpenter
+    spec:
+      containers:
+      - env:
+        - name: KARPENTER_LOG_LEVEL
+          value: INFO
+        - name: KARPENTER_CLOUD_PROVIDER
+          value: bizflycloud
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG
+          value: default
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_NAMESPACE
+          value: karpenter
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_NAME
+          value: default
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_API_VERSION
+          value: karpenter.bizflycloud.com/v1
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_KIND
+          value: ProviderConfig
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_REGION
+          value: HN2
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAME
+          value: bizflycloud-credentials
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_SECRET_REF_NAMESPACE
+          value: karpenter
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_CLOUD_CONFIG_API_ENDPOINT
+          value: https://manage.bizflycloud.vn/api
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_IMAGE_CONFIG_IMAGE_ID
+          value: ubuntu-20.04
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_IMAGE_CONFIG_ROOT_DISK_SIZE
+          value: "20"
+        - name: BIZFLY_CLOUD_AUTH_METHOD
+          valueFrom:
+            secretKeyRef:
+              key: auth-method
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_EMAIL
+          valueFrom:
+            secretKeyRef:
+              key: email
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              key: password
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_APP_CRED_ID
+          valueFrom:
+            secretKeyRef:
+              key: app-cred-id
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_APP_CRED_SECRET
+          valueFrom:
+            secretKeyRef:
+              key: app-cred-secret
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_REGION
+          valueFrom:
+            secretKeyRef:
+              key: region
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_API_URL
+          valueFrom:
+            secretKeyRef:
+              key: api-url
+              name: bizflycloud-credentials
+        - name: BIZFLY_CLOUD_TENANT_ID
+          valueFrom:
+            secretKeyRef:
+              key: tenant-id
+              name: bizflycloud-credentials
+        - name: BKE_CLUSTER_ID
+          value: 5is3thsdtfjuabpz
+        - name: BKE_CLUSTER_TOKEN
+          value: pliVCaTUHeUwXg6a9hlSPTtKb39NaHcS
+        - name: BKE_JOIN_ENDPOINT
+          value: http://engine.api.k8saas.bizflycloud.vn/engine/cluster_join/5is3thsdtfjuabpz
+        - name: BKE_LOG_ENDPOINT
+          value: http://engine.api.k8saas.bizflycloud.vn/engine/cluster_log/5is3thsdtfjuabpz
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_ZONE
+          value: HN1
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_ENABLED
+          value: "true"
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_RECONCILE_INTERVAL
+          value: 5m
+        - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_AUTO_REMEDIATE
+          value: "true"
+        image: cr-hn-1.bizflycloud.vn/cecd854937c8421b81d1d73789acad52/karpenter:v1.2.28
+        imagePullPolicy: IfNotPresent
+        name: karpenter
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      serviceAccount: karpenter
+      serviceAccountName: karpenter
+      terminationGracePeriodSeconds: 30

@@ -1,0 +1,165 @@
+apiVersion: karpenter.bizflycloud.com/v1
+kind: BizflyCloudNodeClass
+metadata:
+  name: default
+spec:
+  diskTypes:
+  - HDD
+  - SSD
+  imageMapping:
+    v1.32.1: 5a821700-a184-4f91-8455-205d47d472c0
+    v1.31.5: 9083394c-0543-4d41-bd84-9207405d823c
+    v1.30.9: 052ff084-fdd2-4c23-bc54-943614c4cdcb
+  metadataOptions:
+    type: template
+  networkPlans:
+  - free_datatransfer
+  - free_bandwidth
+  nodeCategories:
+  - basic
+  - premium
+  - enterprise
+  - dedicated
+  region: HN
+  rootDiskSize: 40
+  sshKeyName: quanlm
+  tags:
+  - karpenter-managed=true
+  template: Ubuntu 24.04 LTS
+  vpcNetworkIds:
+  - e84362d6-0632-4950-87ac-e7bc7d74be6d
+  zones:
+  - HN2
+  - HN1
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  labels:
+    karpenter.bizflycloud.com/disk-type: SSD
+    topology.kubernetes.io/zone: HN2
+  name: default
+  resourceVersion: "7361291"
+  uid: 794a593d-66ea-42e8-ad25-07deadd70e96
+spec:
+  disruption:
+    budgets:
+    - nodes: "1"
+      reasons:
+      - Empty
+      - Underutilized
+    consolidateAfter: 30s
+    consolidationPolicy: WhenEmptyOrUnderutilized
+  template:
+    spec:
+      expireAfter: 720h
+      nodeClassRef:
+        group: karpenter.bizflycloud.com
+        kind: BizflyCloudNodeClass
+        name: default
+      requirements:
+      - key: kubernetes.io/arch
+        operator: In
+        values:
+        - amd64
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values:
+        - on-demand
+      - key: karpenter.bizflycloud.com/node-category
+        operator: In
+        values:
+        - premium
+      - key: karpenter.bizflycloud.com/disk-type
+        operator: In
+        values:
+        - SSD
+      - key: bizflycloud.com/kubernetes-version
+        operator: In
+        values:
+        - v1.32.1
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values:
+        - HN2
+      startupTaints:
+      - effect: NoExecute
+        key: karpenter.sh/unregistered
+        value: "true"
+      - effect: NoSchedule
+        key: karpenter.sh/disrupted
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        value: "true"
+      - effect: NoSchedule
+        key: node.kubernetes.io/not-ready
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready
+      - effect: NoSchedule
+        key: node.cilium.io/agent-not-ready
+      terminationGracePeriod: 30s
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  labels:
+    karpenter.bizflycloud.com/disk-type: HDD
+    topology.kubernetes.io/zone: HN1
+  name: default-2
+spec:
+  disruption:
+    budgets:
+    - nodes: "1"
+      reasons:
+      - Empty
+      - Underutilized
+    consolidateAfter: 30s
+    consolidationPolicy: WhenEmptyOrUnderutilized
+  template:
+    spec:
+      expireAfter: 720h
+      nodeClassRef:
+        group: karpenter.bizflycloud.com
+        kind: BizflyCloudNodeClass
+        name: default
+      requirements:
+      - key: kubernetes.io/arch
+        operator: In
+        values:
+        - amd64
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values:
+        - saving-plane
+      - key: karpenter.bizflycloud.com/node-category
+        operator: In
+        values:
+        - enterprise
+      - key: karpenter.bizflycloud.com/disk-type
+        operator: In
+        values:
+        - HDD
+      - key: bizflycloud.com/kubernetes-version
+        operator: In
+        values:
+        - v1.31.5
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values:
+        - HN1
+      startupTaints:
+      - effect: NoExecute
+        key: karpenter.sh/unregistered
+        value: "true"
+      - effect: NoSchedule
+        key: karpenter.sh/disrupted
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        value: "true"
+      - effect: NoSchedule
+        key: node.kubernetes.io/not-ready
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready
+      - effect: NoSchedule
+        key: node.cilium.io/agent-not-ready
+      terminationGracePeriod: 30s
