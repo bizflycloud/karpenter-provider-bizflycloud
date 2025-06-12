@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
-	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/parser"
+	v1 "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1" // Assuming this path is correct
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/parser" // Assuming this path is correct
 )
 
 // FlavorResponse represents a BizflyCloud flavor
@@ -15,9 +15,8 @@ type FlavorResponse struct {
 	VCPUs    int    `json:"vcpus"`
 	RAM      int    `json:"ram"`
 	Disk     int    `json:"disk"`
-	Category string `json:"category"`
+	Category string `json:"category"` // FIX: Ensure this field is present and capitalized.
 }
-
 // Validator handles validation of instance types
 type Validator struct {
 	log    logr.Logger
@@ -43,39 +42,52 @@ func (v *Validator) IsInstanceTypeUsable(flavor *FlavorResponse, nodeClass *v1.B
 	}
 
 	// Filter out very small instances
-	if flavor.VCPUs < 1 || flavor.RAM < 1024 {
+	if flavor.VCPUs < 1 || flavor.RAM < 1024 { // Assuming RAM is in MB
 		v.log.V(3).Info("Excluding instance type - too small",
 			"name", flavor.Name,
 			"vcpus", flavor.VCPUs,
-			"ram", flavor.RAM)
+			"ram_mb", flavor.RAM)
 		return false
 	}
 
-	// Filter by node category if specified
-	if nodeClass != nil && nodeClass.Spec.NodeCategory != "" {
-		flavorCategory := v.parser.CategorizeFlavor(flavor.Name)
-		requiredCategory := nodeClass.Spec.NodeCategory
+	// Filter by node category if specified in the NodeClass
+	if nodeClass != nil && len(nodeClass.Spec.NodeCategories) > 0 {
+		flavorCategory := v.parser.CategorizeFlavor(flavor.Name) // Get category from flavor name
+		requiredCategories := nodeClass.Spec.NodeCategories
 
 		v.log.V(3).Info("Checking category filter",
 			"flavorName", flavor.Name,
 			"flavorCategory", flavorCategory,
-			"requiredCategory", requiredCategory,
+			"requiredNodeCategories", requiredCategories,
 			"nodeClass", nodeClass.Name)
 
-		if flavorCategory != requiredCategory {
+		categoryMatchFound := false
+		for _, requiredCategory := range requiredCategories {
+			if flavorCategory == requiredCategory {
+				categoryMatchFound = true
+				break
+			}
+		}
+
+		if !categoryMatchFound {
 			v.log.V(3).Info("EXCLUDING instance type - category mismatch",
 				"name", flavor.Name,
 				"flavorCategory", flavorCategory,
-				"requiredCategory", requiredCategory)
+				"requiredNodeCategories", requiredCategories)
 			return false
 		}
+		v.log.V(3).Info("Instance type category MATCHES one of the required categories",
+			"name", flavor.Name,
+			"flavorCategory", flavorCategory,
+			"requiredNodeCategories", requiredCategories)
 	}
 
 	v.log.V(3).Info("Instance type is USABLE",
 		"name", flavor.Name,
-		"category", v.parser.CategorizeFlavor(flavor.Name),
+		"category", v.parser.CategorizeFlavor(flavor.Name), // Log the determined category
 		"vcpus", flavor.VCPUs,
-		"ram", flavor.RAM)
+		"ram_mb", flavor.RAM)
 
 	return true
 }
+

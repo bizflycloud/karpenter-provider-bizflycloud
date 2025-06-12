@@ -17,6 +17,7 @@ import (
 
 const (
 	NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
+	DiskTypeLabel = "karpenter.bizflycloud.com/disk-type"
 )
 
 type Provider interface {
@@ -63,7 +64,7 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
 			VCPUs:    gobizflyFlavor.VCPUs,
 			RAM:      gobizflyFlavor.RAM,
 			Disk:     gobizflyFlavor.Disk,
-			Category: gobizflyFlavor.Category,
+			Category: d.parser.CategorizeFlavor(gobizflyFlavor.Name),
 		}
 
 		// Skip unusable instance types (now includes category filtering)
@@ -102,7 +103,11 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
 			"pods", (&podsQuantity).String())
 
 		// Create offerings
-		offerings := d.createOfferings(flavor)
+		offerings := d.createOfferings(flavor, nodeClass)
+		if len(offerings) == 0 {
+			d.log.V(1).Info("Skipping instance type with no offerings", "name", flavor.Name)
+			continue
+		}
 
 		d.log.V(1).Info("Created offerings",
 			"instanceType", flavor.Name,
@@ -154,31 +159,44 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
 }
 
 // createOfferings creates cloud provider offerings for an instance type
-func (d *defaultProvider) createOfferings(flavor *validator.FlavorResponse) cloudprovider.Offerings {
+func (d *defaultProvider) createOfferings(flavor *validator.FlavorResponse, nodeClass *v1.BizflyCloudNodeClass) cloudprovider.Offerings {
 	var offerings cloudprovider.Offerings
-	availableZones := []string{"HN1", "HN2"}
-	capacityTypes := []string{"on-demand", "spot", "saving_plan"}
 
+	// Use zones and disk types from the NodeClass spec.
+	availableZones := nodeClass.Spec.Zones
+	availableDiskTypes := nodeClass.Spec.DiskTypes
+	capacityTypes := []string{"on-demand", "saving-plan"} // Assuming only on-demand for now.
+
+	if len(availableZones) == 0 {
+		d.log.V(1).Info("No zones defined in NodeClass, cannot create offerings", "nodeClass", nodeClass.Name)
+		return offerings
+	}
+	if len(availableDiskTypes) == 0 {
+		d.log.V(1).Info("No diskTypes defined in NodeClass, cannot create offerings", "nodeClass", nodeClass.Name)
+		return offerings
+	}
+	
+	// Create an offering for each combination of Zone, CapacityType, and DiskType.
 	for _, zone := range availableZones {
 		for _, capacityType := range capacityTypes {
-			offeringRequirements := scheduling.NewRequirements(
-				scheduling.NewRequirement(corev1.LabelInstanceTypeStable, corev1.NodeSelectorOpIn, flavor.Name),
-				scheduling.NewRequirement(corev1.LabelArchStable, corev1.NodeSelectorOpIn, "amd64"),
-				scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zone),
-				scheduling.NewRequirement("karpenter.sh/capacity-type", corev1.NodeSelectorOpIn, capacityType),
-				scheduling.NewRequirement(NodeCategoryLabel, corev1.NodeSelectorOpIn, d.parser.CategorizeFlavor(flavor.Name)),
-			)
+			for _, diskType := range availableDiskTypes {
+				offeringRequirements := scheduling.NewRequirements(
+					scheduling.NewRequirement(corev1.LabelTopologyZone, corev1.NodeSelectorOpIn, zone),
+					scheduling.NewRequirement("karpenter.sh/capacity-type", corev1.NodeSelectorOpIn, capacityType),
+					scheduling.NewRequirement(NodeCategoryLabel, corev1.NodeSelectorOpIn, flavor.Category),
+					// IMPROVEMENT: Add disk type to the offering's requirements.
+					scheduling.NewRequirement(DiskTypeLabel, corev1.NodeSelectorOpIn, diskType),
+				)
 
-			basePrice := d.pricing.CalculateBasePrice(flavor.VCPUs, flavor.RAM)
-			price := d.pricing.CalculateCategoryPrice(basePrice, d.parser.CategorizeFlavor(flavor.Name), capacityType)
+				basePrice := d.pricing.CalculateBasePrice(flavor.VCPUs, flavor.RAM)
+				price := d.pricing.CalculateCategoryPrice(basePrice, flavor.Category, capacityType)
 
-			offering := cloudprovider.Offering{
-				Requirements:        offeringRequirements,
-				Price:               price,
-				Available:           true,
-				ReservationCapacity: 1,
+				offerings = append(offerings, &cloudprovider.Offering{
+					Requirements:        offeringRequirements,
+					Price:               price,
+					Available:           true,
+				})
 			}
-			offerings = append(offerings, &offering)
 		}
 	}
 

@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0
+    controller-gen.kubebuilder.io/version: v0.15.0 # Ensure this version is compatible or update as needed
   name: bizflycloudnodeclasses.karpenter.bizflycloud.com
 spec:
   group: karpenter.bizflycloud.com
@@ -18,18 +18,22 @@ spec:
     singular: bizflycloudnodeclass
   scope: Cluster
   versions:
-  - additionalPrinterColumns:
+  - name: v1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    additionalPrinterColumns:
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    - jsonPath: .spec.nodeCategory
-      name: Category
+    - jsonPath: .spec.nodeCategories # Updated path
+      name: Categories # Renamed column for clarity, optional
       priority: 1
-      type: string
-    name: v1
+      type: string # This will display the array as a string, e.g., ["basic", "premium"]
     schema:
       openAPIV3Schema:
         description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass API
@@ -52,18 +56,20 @@ spec:
           metadata:
             type: object
           spec:
+            description: BizflyCloudNodeClassSpec defines the desired state of BizflyCloudNodeClass
             properties:
-              diskType:
-                default: SSD
-                description: DiskType specifies the type of disk to use (SSD, HDD)
-                enum:
-                - SSD
-                - HDD
-                type: string
+              diskTypes: # Renamed from diskType
+                description: DiskTypes specifies the types of disks to use (e.g., ["SSD", "HDD"]).
+                type: array # Changed to array
+                items:
+                  type: string
+                  enum:
+                  - SSD
+                  - HDD
+                # Default removed, handle in controller or CRD defaults if needed for items
               imageId:
                 description: ImageID is the ID of the image to use for nodes
                 type: string
-              # NEW: Image mapping for Kubernetes versions
               imageMapping:
                 description: ImageMapping maps Kubernetes versions to image IDs
                 type: object
@@ -79,27 +85,29 @@ spec:
                 required:
                 - type
                 type: object
-              # NEW: Network plan field
-              networkPlan:
-                description: NetworkPlan specifies the network plan for the instances
-                enum:
-                - free_datatransfer
-                - paid_datatransfer
-                default: free_datatransfer
-                type: string
-              nodeCategory:
-                default: basic
-                description: NodeCategory specifies the category of nodes to provision
-                enum:
-                - basic
-                - premium
-                - enterprise
-                - dedicated
-                type: string
+              networkPlans:
+                description: NetworkPlans specifies the list of network plans for the instances.
+                type: array
+                items:
+                  type: string
+                  enum:
+                  - free_datatransfer
+                  - free_bandwidth
+              nodeCategories: # Renamed from nodeCategory
+                description: NodeCategories specifies the categories of nodes to provision.
+                type: array # Changed to array
+                items:
+                  type: string
+                  enum:
+                  - basic
+                  - premium
+                  - enterprise
+                  - dedicated
+                # Default removed, handle in controller or CRD defaults if needed for items
               placementStrategy:
                 description: |-
                   PlacementStrategy defines how nodes should be placed across zones
-                  Only used when Zone or Subnet is not specified
+                  Only used when Zones is not specified
                 properties:
                   spread:
                     properties:
@@ -128,11 +136,9 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
-              # NEW: SSH key name field
               sshKeyName:
                 description: SSHKeyName is the name of the SSH key pair to use for instances
                 type: string
-              # NEW: SSH keys array field
               sshKeys:
                 description: SSHKeys is a list of SSH public keys to inject into instances
                 items:
@@ -151,11 +157,12 @@ spec:
                 items:
                   type: string
                 type: array
-              zone:
+              zones:
                 description: |-
-                  Zone is the availability zone where nodes will be created
-                  If not specified, zones will be automatically selected based on placement strategy
-                type: string
+                  Zones is the list of availability zones where nodes can be created... If not specified, zones will be automatically selected based on placement strategy
+                items:
+                  type: string
+                type: array
             required:
             - template
             type: object
@@ -238,7 +245,4 @@ spec:
                 type: array
             type: object
         type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+

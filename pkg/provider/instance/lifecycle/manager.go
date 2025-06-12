@@ -48,6 +48,12 @@ type InstanceTypeSpec struct {
 	Tier string
 }
 
+const (
+	NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
+	DiskTypeLabel     = "karpenter.bizflycloud.com/disk-type"
+	NetworkPlanLabel  = "karpenter.bizflycloud.com/network-plan"
+)
+
 // NewManager creates a new instance lifecycle manager
 func NewManager(client client.Client, log logr.Logger, bizflyClient *gobizfly.Client, region string, config *v1bizfly.ProviderConfig) *Manager {
 	return &Manager{
@@ -72,33 +78,67 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve image ID: %w", err)
 	}
-	diskType := nodeClass.Spec.DiskType
+
+    // Debug: Log all requirements
+    m.Log.Info("NodeClaim requirements debug:")
+    for i, req := range nodeClaim.Spec.Requirements {
+        m.Log.Info("Requirement", "index", i, "key", req.Key, "operator", req.Operator, "values", req.Values)
+    }
+
+	// Get disk type from requirements
+    diskType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, DiskTypeLabel)
+    if !ok {
+        // Fallback: try to find any disk-type related requirement
+        for _, req := range nodeClaim.Spec.Requirements {
+            if strings.Contains(req.Key, "disk-type") {
+                if len(req.Values) > 0 {
+                    diskType = req.Values[0]
+                    ok = true
+                    m.Log.Info("Found disk type with fallback search", "key", req.Key, "value", diskType)
+                    break
+                }
+            }
+        }
+        
+        if !ok {
+            return nil, fmt.Errorf("disk type not found in node claim requirements, ensure '%s' is specified in NodePool. Available keys: %v", 
+                DiskTypeLabel, m.getRequirementKeys(nodeClaim.Spec.Requirements))
+        }
+    }
+
 	rootDiskSize := nodeClass.Spec.RootDiskSize
 	vpcNetworkIDs := nodeClass.Spec.VPCNetworkIDs
 
 	// Get availability zone
-	zone := nodeClass.Spec.Zone
-	if zone == "" {
-		// Fallback to requirements if not specified in NodeClass
-		for _, req := range nodeClaim.Spec.Requirements {
-			if req.Key == corev1.LabelTopologyZone && len(req.Values) > 0 {
-				zone = req.Values[0]
-				break
-			}
-		}
+	selectedZone, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, corev1.LabelTopologyZone)
+	if !ok {
+		return nil, fmt.Errorf("zone not found in node claim requirements, ensure 'topology.kubernetes.io/zone' is specified in NodePool")
 	}
-	if zone == "" {
-		return nil, "", "", fmt.Errorf("zone must be specified in NodeClass or requirements")
-	}
+
 
 	nodeName := nodeClaim.Name
 
 	// Determine server type
-	serverType := nodeClass.Spec.NodeCategory
-    if nodeClass.Spec.NetworkPlan == "" {
-        return nil, fmt.Errorf("networkPlan must be specified in NodeClass")
+	// FIX: Use the plural 'NodeCategories' field and select the first element.
+	if len(nodeClass.Spec.NodeCategories) == 0 {
+		return nil, fmt.Errorf("nodeCategories must be specified in NodeClass")
+	}
+	// Get server type (category) from requirements
+	serverType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, NodeCategoryLabel)
+	if !ok {
+		return nil, fmt.Errorf("node category not found in node claim requirements, ensure '%s' is specified in NodePool", NodeCategoryLabel)
+	}
+
+	networkPlan, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, NetworkPlanLabel)
+    if !ok {
+        // Fallback to the first network plan in the NodeClass if not specified in requirements
+        if len(nodeClass.Spec.NetworkPlans) > 0 {
+            networkPlan = nodeClass.Spec.NetworkPlans[0]
+            m.Log.Info("Network plan not in requirements, falling back to NodeClass default", "plan", networkPlan)
+        } else {
+            return nil, fmt.Errorf("network plan not found in requirements and none specified in NodeClass")
+        }
     }
-    networkPlan := nodeClass.Spec.NetworkPlan
 	// Prepare metadata
 	metadata := m.buildMetadata(nodeClass, vpcNetworkIDs[0])
 	userData := "#!/bin/bash\n/opt/bizfly-kubernetes-engine/bootstrap.sh"
@@ -110,7 +150,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 		"name", nodeName,
 		"instanceType", instanceTypeName,
 		"imageID", imageID,
-		"zone", zone,
+		"zone", selectedZone,
 		"serverType", serverType,
 		"vpcNetworkIDs", vpcNetworkIDs,
 		"sshKey", sshKey)
@@ -120,7 +160,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 		Name:             nodeName,
 		FlavorName:       instanceTypeName,
 		Type:             serverType,
-		AvailabilityZone: zone,
+		AvailabilityZone: selectedZone,
 		VPCNetworkIDs:    vpcNetworkIDs,
 		IsCreatedWan:     utils.BoolPtr(true),
 		UserData:         userData,
@@ -543,4 +583,24 @@ func (m *Manager) parseCpuRam(cpuRamStr string) (int, int, error) {
 	}
 
 	return cpu, ram, nil
+}
+
+func getValueFromRequirements(reqs []karpenterv1.NodeSelectorRequirementWithMinValues, key string) (string, bool) {
+	for _, req := range reqs {
+		if req.Key == key {
+			if len(req.Values) > 0 {
+				// Return the first value found for the requirement
+				return req.Values[0], true
+			}
+		}
+	}
+	return "", false
+}
+
+func (m *Manager) getRequirementKeys(reqs []karpenterv1.NodeSelectorRequirementWithMinValues) []string {
+    keys := make([]string, len(reqs))
+    for i, req := range reqs {
+        keys[i] = req.Key
+    }
+    return keys
 }

@@ -1,132 +1,203 @@
-# Karpenter Provider for BizFly Cloud
+# Karpenter Provider for BizflyCloud
 
-This provider enables [Karpenter](https://karpenter.sh) to provision nodes in BizFly Cloud.
+This repository contains the BizflyCloud provider implementation for [Karpenter](https://karpenter.sh), a Kubernetes-native autoscaling solution. The provider enables Karpenter to provision and manage nodes on BizflyCloud infrastructure.
+
+## Overview
+
+Karpenter is a Kubernetes autoscaler that automatically provisions new nodes in response to unschedulable pods. This provider allows Karpenter to work with BizflyCloud's infrastructure, enabling automatic node provisioning and management.
+
+### Key Features
+
+- Automatic node provisioning based on pod requirements
+- Integration with BizflyCloud's API
+- Customizable node configurations through NodeClasses
+- Drift detection and remediation
+- Support for multiple regions and zones
+- Resource tagging and management
 
 ## Prerequisites
 
-- Kubernetes cluster running on BizFly Cloud
-- Karpenter v0.27.0 or later installed in your cluster
-- `kubectl` configured to access your cluster
-- BizFly Cloud account credentials
+- Kubernetes cluster running on BizflyCloud
+- kubectl configured to communicate with your cluster
+- BizflyCloud API credentials
+- Karpenter v0.32.0 or later
 
 ## Installation
 
-1. First, create the namespace if it doesn't exist:
+### 1. Create the Karpenter namespace
 
 ```bash
 kubectl create namespace karpenter
 ```
 
-2. Create the BizFly Cloud credentials secret:
+### 2. Create BizflyCloud credentials secret
+
+Create a secret containing your BizflyCloud credentials:
 
 ```bash
-# Edit config/samples/secret.yaml to add your credentials first
-kubectl apply -f config/samples/secret.yaml
+kubectl create secret generic bizflycloud-credentials \
+  --namespace karpenter \
+  --from-literal=api-url=https://manage.bizflycloud.vn/api \
+  --from-literal=auth-method=application_credential \
+  --from-literal=app-cred-id=YOUR_APP_CREDENTIAL_ID \
+  --from-literal=app-cred-secret=YOUR_APP_CREDENTIAL_SECRET \
+  --from-literal=region=YOUR_REGION \
+  --from-literal=tenant-id=YOUR_TENANT_ID
 ```
 
-3. Install the CRDs:
+### 3. Install the CRDs
 
 ```bash
-kubectl apply -f config/crd/
+kubectl apply -f config/crd/karpenter.bizflycloud.com_bizflycloudnodeclasses.yaml
 ```
 
-4. Deploy the provider:
+### 4. Install Karpenter with BizflyCloud provider
 
 ```bash
-kubectl apply -f config/deployment.yaml
+kubectl apply -f config/crd/karpenter-deployment.yaml
 ```
 
-5. Create the provider configuration:
+### 5. Create a default NodeClass
 
 ```bash
-# Edit config/samples/minimal-providerconfig.yaml to match your environment
-kubectl apply -f config/samples/minimal-providerconfig.yaml
-```
-
-6. Create a provisioner:
-
-```bash
-# Edit config/samples/minimal-provisioner.yaml to match your requirements
-kubectl apply -f config/samples/minimal-provisioner.yaml
+kubectl apply -f config/crd/nodepool.yaml
 ```
 
 ## Configuration
 
-### Provider Configuration
+### NodeClass Configuration
 
-The minimal provider configuration requires:
+NodeClasses define the configuration for nodes that Karpenter will provision. Here's an example:
 
 ```yaml
-apiVersion: bizflycloud.karpenter.sh/v1
-kind: ProviderConfig
+apiVersion: karpenter.bizflycloud.com/v1
+kind: BizflyCloudNodeClass
 metadata:
   name: default
 spec:
-  region: HN1  # Your BizFly Cloud region
-  secretRef:
-    name: bizflycloud-credentials
-    namespace: karpenter
-  cloudConfig:
-    apiEndpoint: "https://manage.bizflycloud.vn/api"
-  imageConfig:
-    imageID: "ubuntu-20.04"
-    rootDiskSize: 20
+  diskTypes:
+  - HDD
+  - SSD
+  imageMapping:
+    v1.32.1: 5a821700-a184-4f91-8455-205d47d472c0
+    v1.31.5: 9083394c-0543-4d41-bd84-9207405d823c
+    v1.30.9: 052ff084-fdd2-4c23-bc54-943614c4cdcb
+  metadataOptions:
+    type: template
+  networkPlans:
+  - free_datatransfer
+  - free_bandwidth
+  nodeCategories:
+  - basic
+  - premium
+  - enterprise
+  - dedicated
+  region: HN
+  rootDiskSize: 40
+  sshKeyName: quanlm
+  tags:
+  - karpenter-managed=true
+  template: Ubuntu 24.04 LTS
+  vpcNetworkIds:
+  - <your own VPC network ID>
+  zones:
+  - HN2
+  - HN1
 ```
 
-### Provisioner Configuration
+## Usage
 
-A basic provisioner configuration looks like:
+### Creating a NodePool
 
 ```yaml
 apiVersion: karpenter.sh/v1
-kind: Provisioner
+kind: NodePool
 metadata:
-  name: default
+  labels:
+    karpenter.bizflycloud.com/disk-type: HDD
+    topology.kubernetes.io/zone: HN1
+  name: default-2
 spec:
-  providerRef:
-    name: default
-    apiVersion: bizflycloud.karpenter.sh/v1
-    kind: ProviderConfig
-  
-  requirements:
-    - key: "node.kubernetes.io/instance-type"
-      operator: In
-      values: ["4c_8g", "8c_16g"]
-    
-    - key: "topology.kubernetes.io/zone"
-      operator: In
-      values: ["HN1-a", "HN1-b"]
-  
-  limits:
-    resources:
-      cpu: 20
-      memory: 100Gi
-  
-  ttlSecondsAfterEmpty: 30
+  disruption:
+    budgets:
+    - nodes: "1"
+      reasons:
+      - Empty
+      - Underutilized
+    consolidateAfter: 30s
+    consolidationPolicy: WhenEmptyOrUnderutilized
+  template:
+    spec:
+      expireAfter: 720h
+      nodeClassRef:
+        group: karpenter.bizflycloud.com
+        kind: BizflyCloudNodeClass
+        name: default
+      requirements:
+      - key: kubernetes.io/arch
+        operator: In
+        values:
+        - amd64
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values:
+        - saving-plane
+      - key: karpenter.bizflycloud.com/node-category
+        operator: In
+        values:
+        - enterprise
+      - key: karpenter.bizflycloud.com/disk-type
+        operator: In
+        values:
+        - HDD
+      - key: bizflycloud.com/kubernetes-version
+        operator: In
+        values:
+        - v1.31.5
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values:
+        - HN1
+      startupTaints:
+      - effect: NoExecute
+        key: karpenter.sh/unregistered
+        value: "true"
+      - effect: NoSchedule
+        key: karpenter.sh/disrupted
+      - effect: NoSchedule
+        key: node.cloudprovider.kubernetes.io/uninitialized
+        value: "true"
+      - effect: NoSchedule
+        key: node.kubernetes.io/not-ready
+      - effect: NoExecute
+        key: node.kubernetes.io/not-ready
+      - effect: NoSchedule
+        key: node.cilium.io/agent-not-ready
+      terminationGracePeriod: 30s
 ```
 
-## Verification
+### Testing the Installation
 
-To verify the installation:
+Deploy a test workload to verify the installation:
 
-1. Check the provider deployment:
 ```bash
-kubectl get pods -n karpenter
+kubectl apply -f config/crd/test-deployment.yaml
 ```
 
-2. Check the provider configuration:
-```bash
-kubectl get providerconfig
-```
+## Architecture
 
-3. Check the provisioner:
-```bash
-kubectl get provisioner
-```
+The BizflyCloud provider for Karpenter consists of several key components:
 
-## Troubleshooting
+1. **Cloud Provider**: Implements the Karpenter cloud provider interface for BizflyCloud
+2. **Instance Provider**: Handles instance lifecycle operations
+3. **Instance Type Provider**: Manages available instance types and their configurations
+4. **Drift Detection**: Monitors and remediates configuration drift
+5. **Node Conversion**: Converts between BizflyCloud instances and Kubernetes nodes
 
-Check the provider logs:
-```bash
-kubectl logs -n karpenter -l app.kubernetes.io/name=karpenter-provider-bizflycloud
-```
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+## License
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.

@@ -24,58 +24,54 @@ type BizflyCloudNodeClassSpec struct {
 	// +optional
 	Region string `json:"region"`
 
-	// Zone is the availability zone where nodes will be created
-	// If not specified, zones will be automatically selected based on placement strategy
+	// Zones is the list of availability zones where nodes can be created
 	// +optional
-	Zone string `json:"zone,omitempty"`
+	Zones []string `json:"zones,omitempty"`
 
 	// Template is the name of the template to use for nodes
 	// +required
 	Template string `json:"template"`
 
-	// NodeCategory specifies the category of nodes to provision
-	// +kubebuilder:validation:Enum=basic;premium;enterprise;dedicated
-	// +kubebuilder:default="basic"
+	// NodeCategories specifies the category of nodes to provision
 	// +optional
-	NodeCategory string `json:"nodeCategory,omitempty"`
+	NodeCategories []string `json:"nodeCategories,omitempty"`
 
 	// ImageID is the ID of the image to use for nodes
 	// +optional
 	ImageID string `json:"imageId,omitempty"`
-	// SSHKeyName is the name of the SSH key pair to use for instances
-	// +optional
+	
 	// ImageMapping maps Kubernetes versions to image IDs
 	// +optional
 	ImageMapping map[string]string `json:"imageMapping,omitempty"`
+
+	// SSHKeyName is the name of the SSH key pair to use for instances
+	// +optional
 	SSHKeyName string `json:"sshKeyName,omitempty"`
 
 	// SSHKeys is a list of SSH public keys to inject into instances
 	// +optional
 	SSHKeys []string `json:"sshKeys,omitempty"`
 
-	// DiskType specifies the type of disk to use (SSD, HDD)
-	// +kubebuilder:validation:Enum=SSD;HDD
-	// +kubebuilder:default="SSD"
+	// DiskTypes specifies the type of disk to use (e.g., SSD, HDD)
 	// +optional
-	DiskType string `json:"diskType,omitempty"`
+	DiskTypes []string `json:"diskTypes,omitempty"`
 
 	// RootDiskSize specifies the size of the root disk in GB
 	// +kubebuilder:validation:Minimum=20
-	// +kubebuilder:validation:Maximum=1000
 	// +kubebuilder:default=40
 	// +optional
 	RootDiskSize int `json:"rootDiskSize,omitempty"`
-	// NetworkPlan specifies the network plan for the instances
-	// +kubebuilder:validation:Enum=free_datatransfer;paid_datatransfer
-	// +kubebuilder:default="free_datatransfer"
+
+	// FIX: Converted NetworkPlan from a string to a string array `[]string`
+	// NetworkPlans specifies the list of network plans for the instances.
 	// +optional
-	NetworkPlan string `json:"networkPlan,omitempty"`
+	NetworkPlans []string `json:"networkPlans,omitempty"`
+
 	// VPCNetworkIDs is the list of VPC network IDs to attach to the nodes
 	// +optional
 	VPCNetworkIDs []string `json:"vpcNetworkIds,omitempty"`
 
 	// PlacementStrategy defines how nodes should be placed across zones
-	// Only used when Zone or Subnet is not specified
 	// +optional
 	PlacementStrategy *PlacementStrategy `json:"placementStrategy,omitempty"`
 
@@ -84,12 +80,10 @@ type BizflyCloudNodeClassSpec struct {
 	Tags []string `json:"tags,omitempty"`
 
 	// MetadataOptions for the generated launch template of provisioned nodes.
-	// +kubebuilder:default={"type":"template"}
 	// +optional
 	MetadataOptions *MetadataOptions `json:"metadataOptions,omitempty"`
 
 	// SecurityGroups to apply to the VMs
-	// +kubebuilder:validation:MaxItems:=10
 	// +optional
 	SecurityGroups []SecurityGroupsTerm `json:"securityGroups,omitempty"`
 }

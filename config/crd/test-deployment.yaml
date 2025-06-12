@@ -3,7 +3,7 @@ kind: Deployment
 metadata:
   name: inflate
 spec:
-  replicas: 0
+  replicas: 5
   selector:
     matchLabels:
       app: inflate
@@ -12,6 +12,32 @@ spec:
       labels:
         app: inflate
     spec:
+      nodeSelector:
+        karpenter.bizflycloud.com/disk-type: HDD
+      containers:
+      - name: inflate
+        image: public.ecr.aws/eks-distro/kubernetes/pause:3.2
+        resources:
+          requests:
+            cpu: 1
+            memory: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inflate2
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: inflate
+  template:
+    metadata:
+      labels:
+        app: inflate
+    spec:
+      nodeSelector:
+        karpenter.bizflycloud.com/node-category: premium
       containers:
       - name: inflate
         image: public.ecr.aws/eks-distro/kubernetes/pause:3.2

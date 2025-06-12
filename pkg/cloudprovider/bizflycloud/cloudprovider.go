@@ -368,8 +368,20 @@ func (p *cloudProviderImpl) setRequiredLabels(nodeClaim *v1.NodeClaim, instanceT
 
 	nodeClaim.Labels[corev1.LabelInstanceTypeStable] = instanceTypeName
 	nodeClaim.Labels[corev1.LabelArchStable] = "amd64"
-	nodeClaim.Labels["karpenter.sh/capacity-type"] = "on-demand"
 	nodeClaim.Labels[NodeLabelRegion] = p.region
+
+    // DYNAMIC: Get values from NodeClaim requirements instead of hardcoding
+    p.setLabelFromRequirements(nodeClaim, "karpenter.sh/capacity-type", "saving-plan")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/disk-type", "HDD")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/node-category", "basic")
+    p.setLabelFromRequirements(nodeClaim, "bizflycloud.com/kubernetes-version", "v1.32.1")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/bizflycloudnodeclass", "default")
+    p.setLabelFromRequirements(nodeClaim, corev1.LabelTopologyZone, p.zone)
+    
+    // Get nodepool name from owner references dynamically
+    if nodePoolName := p.getNodePoolFromOwnerRefs(nodeClaim); nodePoolName != "" {
+        nodeClaim.Labels["karpenter.sh/nodepool"] = nodePoolName
+    }
 }
 
 func (p *cloudProviderImpl) convertNodeClaimToNode(nodeClaim *v1.NodeClaim) *corev1.Node {
@@ -727,6 +739,7 @@ func (p *cloudProviderImpl) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v
 	// Create requirements from node labels
 	var requirements []v1.NodeSelectorRequirementWithMinValues
 
+	// Standard Kubernetes labels
 	if instanceType, exists := nodeSpec.Labels[corev1.LabelInstanceTypeStable]; exists {
 		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
 			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
@@ -747,14 +760,87 @@ func (p *cloudProviderImpl) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v
 		})
 	}
 
-	// Add capacity type requirement
-	requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
-		NodeSelectorRequirement: corev1.NodeSelectorRequirement{
-			Key:      "karpenter.sh/capacity-type",
-			Operator: corev1.NodeSelectorOpIn,
-			Values:   []string{"on-demand"},
-		},
-	})
+	if zone, exists := nodeSpec.Labels[corev1.LabelTopologyZone]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      corev1.LabelTopologyZone,
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{zone},
+			},
+		})
+	}
+
+	// BizflyCloud-specific labels
+	if kubernetesVersion, exists := nodeSpec.Labels["bizflycloud.com/kubernetes-version"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "bizflycloud.com/kubernetes-version",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{kubernetesVersion},
+			},
+		})
+	}
+
+	if nodeCategory, exists := nodeSpec.Labels["karpenter.bizflycloud.com/node-category"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.bizflycloud.com/node-category",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{nodeCategory},
+			},
+		})
+	}
+
+	// CRITICAL: Add the missing disk-type requirement
+	if diskType, exists := nodeSpec.Labels["karpenter.bizflycloud.com/disk-type"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.bizflycloud.com/disk-type",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{diskType},
+			},
+		})
+	}
+
+	if bizflyNodeClass, exists := nodeSpec.Labels["karpenter.bizflycloud.com/bizflycloudnodeclass"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.bizflycloud.com/bizflycloudnodeclass",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{bizflyNodeClass},
+			},
+		})
+	}
+
+	// Karpenter-specific labels
+	if capacityType, exists := nodeSpec.Labels["karpenter.sh/capacity-type"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.sh/capacity-type",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{capacityType},
+			},
+		})
+	} else {
+		// Default to saving-plan if not present (based on your NodeClaim)
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.sh/capacity-type",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{"saving-plan"},
+			},
+		})
+	}
+
+	if nodePool, exists := nodeSpec.Labels["karpenter.sh/nodepool"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.sh/nodepool",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{nodePool},
+			},
+		})
+	}
 
 	return &v1.NodeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -768,6 +854,7 @@ func (p *cloudProviderImpl) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v
 		},
 	}
 }
+
 
 func (p *cloudProviderImpl) newTerminatingNodeClassError(name string) *k8serrors.StatusError {
 	qualifiedResource := schema.GroupResource{Group: apis.Group, Resource: "bizflycloudnodeclasses"}
@@ -906,4 +993,28 @@ func (p *cloudProviderImpl) parseCpuRam(cpuRamStr string) (int, int, error) {
 	}
 
 	return cpu, ram, nil
+}
+
+func (p *cloudProviderImpl) getNodePoolFromOwnerRefs(nodeClaim *v1.NodeClaim) string {
+    for _, owner := range nodeClaim.OwnerReferences {
+        if owner.Kind == "NodePool" {
+            return owner.Name
+        }
+    }
+    return ""
+}
+
+// setLabelFromRequirements sets a label on the NodeClaim from the requirements if present, otherwise sets a default value
+func (p *cloudProviderImpl) setLabelFromRequirements(nodeClaim *v1.NodeClaim, key, defaultValue string) {
+    // Try to get value from requirements first
+    for _, req := range nodeClaim.Spec.Requirements {
+        if req.Key == key && len(req.Values) > 0 {
+            nodeClaim.Labels[key] = req.Values[0]
+            p.log.V(1).Info("Set label from requirements", "key", key, "value", req.Values[0])
+            return
+        }
+    }
+    // Use default if not found in requirements
+    nodeClaim.Labels[key] = defaultValue
+    p.log.V(1).Info("Set label from default", "key", key, "value", defaultValue)
 }
