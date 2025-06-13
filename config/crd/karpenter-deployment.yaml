@@ -87,10 +87,10 @@ spec:
             secretKeyRef:
               key: api-url
               name: bizflycloud-credentials
-        - name: BIZFLY_CLOUD_TENANT_ID
+        - name: BIZFLY_CLOUD_PROJECT_ID
           valueFrom:
             secretKeyRef:
-              key: tenant-id
+              key: project-id
               name: bizflycloud-credentials
         - name: BKE_CLUSTER_ID
           value: 5is3thsdtfjuabpz
