@@ -3,6 +3,13 @@ on:
   push:
     tags:
        - 'v*'
+  workflow_dispatch:  # Add this line
+    inputs:
+      tag:
+        description: 'Version tag to build'
+        required: true
+        default: 'v1.0.0'
+
 
 jobs:
   docker:
@@ -18,9 +25,14 @@ jobs:
       - name: Extract version from tag
         id: vars
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "builddate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+
           
       - name: Check output
         env:
