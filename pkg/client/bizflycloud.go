@@ -18,7 +18,7 @@ const (
 	EnvAppCredID     = "BIZFLY_CLOUD_APP_CRED_ID"
 	EnvAppCredSecret = "BIZFLY_CLOUD_APP_CRED_SECRET"
 	EnvAPIURL        = "BIZFLY_CLOUD_API_URL"
-	EnvTenantID      = "BIZFLY_CLOUD_TENANT_ID"
+	EnvProjectID      = "BIZFLY_CLOUD_PROJECT_ID"
 
 	// Default values
 	DefaultRegion = "HN"
@@ -37,7 +37,7 @@ type Config struct {
 	AppCredID     string
 	AppCredSecret string
 	APIUrl        string
-	TenantID      string
+	ProjectID      string
 	Region        string
 }
 
@@ -50,7 +50,7 @@ func LoadConfigFromEnv() *Config {
 		AppCredID:     os.Getenv(EnvAppCredID),
 		AppCredSecret: os.Getenv(EnvAppCredSecret),
 		APIUrl:        getEnvWithDefault(EnvAPIURL, DefaultAPIURL),
-		TenantID:      os.Getenv(EnvTenantID),
+		ProjectID:     os.Getenv(EnvProjectID),
 		Region:        getEnvWithDefault(EnvRegion, DefaultRegion),
 	}
 
@@ -94,7 +94,7 @@ func NewBizflyClient(config *Config, log logr.Logger) (*gobizfly.Client, error) 
 
 	client, err := gobizfly.NewClient(
 		gobizfly.WithAPIURL(config.APIUrl),
-		gobizfly.WithProjectID(config.TenantID),
+		gobizfly.WithProjectID(config.ProjectID),
 		gobizfly.WithRegionName(config.Region),
 	)
 	if err != nil {
