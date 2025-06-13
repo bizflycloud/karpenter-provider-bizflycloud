@@ -42,13 +42,13 @@ kubectl create secret generic bizflycloud-credentials \
   --from-literal=app-cred-id=YOUR_APP_CREDENTIAL_ID \
   --from-literal=app-cred-secret=YOUR_APP_CREDENTIAL_SECRET \
   --from-literal=region=YOUR_REGION \
-  --from-literal=tenant-id=YOUR_TENANT_ID
+  --from-literal=project-id=YOUR_PROJECT_ID
 ```
 
 ### 3. Install the CRDs
 
 ```bash
-kubectl apply -f config/crd/karpenter.bizflycloud.com_bizflycloudnodeclasses.yaml
+kubectl apply -f https://raw.githubusercontent.com/bizflycloud/karpenter-provider-bizflycloud/refs/heads/main/config/crd/karpenter.bizflycloud.com_bizflycloudnodeclasses.yaml
 
 kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_nodeclaims.yaml
 
@@ -58,13 +58,13 @@ kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/c
 ### 4. Install Karpenter with BizflyCloud provider
 
 ```bash
-kubectl apply -f config/crd/karpenter-deployment.yaml
+kubectl apply -f https://raw.githubusercontent.com/bizflycloud/karpenter-provider-bizflycloud/refs/heads/main/config/crd/karpenter-deployment.yaml
 ```
 
 ### 5. Create a default NodeClass
 
 ```bash
-kubectl apply -f config/crd/nodepool.yaml
+kubectl apply -f https://raw.githubusercontent.com/bizflycloud/karpenter-provider-bizflycloud/refs/heads/main/config/crd/node-demo.yaml
 ```
 
 ## Configuration
@@ -185,7 +185,7 @@ spec:
 Deploy a test workload to verify the installation:
 
 ```bash
-kubectl apply -f config/crd/test-deployment.yaml
+kubectl apply -f https://raw.githubusercontent.com/bizflycloud/karpenter-provider-bizflycloud/refs/heads/main/config/crd/test-deployment.yaml
 ```
 
 ## Architecture
