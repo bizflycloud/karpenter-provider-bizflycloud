@@ -108,7 +108,7 @@ spec:
           value: 5m
         - name: KARPENTER_CLOUD_PROVIDER_CONFIG_DRIFT_DETECTION_AUTO_REMEDIATE
           value: "true"
-        image: cr-hn-1.bizflycloud.vn/cecd854937c8421b81d1d73789acad52/karpenter:v1.2.28
+        image: cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:v1.2.2-beta.1
         imagePullPolicy: IfNotPresent
         name: karpenter
         resources: {}
