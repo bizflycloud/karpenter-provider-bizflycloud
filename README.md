@@ -49,6 +49,10 @@ kubectl create secret generic bizflycloud-credentials \
 
 ```bash
 kubectl apply -f config/crd/karpenter.bizflycloud.com_bizflycloudnodeclasses.yaml
+
+kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_nodeclaims.yaml
+
+kubectl apply -f https://raw.githubusercontent.com/aws/karpenter/main/pkg/apis/crds/karpenter.sh_nodepools.yaml
 ```
 
 ### 4. Install Karpenter with BizflyCloud provider
