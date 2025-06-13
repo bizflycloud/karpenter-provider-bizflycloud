@@ -2,29 +2,40 @@ name: Release to Docker and git
 on:
   push:
     tags:
-       - v*
-#on: [push, pull_request]
+       - 'v*'
+
 jobs:
-  
   docker:
     name: Release on Docker hub
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v1
-      - name: Set output
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Debug Environment
+        uses: hmarr/debug-action@v3
+        
+      - name: Extract version from tag
         id: vars
-        run: echo ::set-output name=tag::${GITHUB_REF#refs/*/}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/}
+          echo "tag=${VERSION}" >> $GITHUB_OUTPUT
+          echo "builddate=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
+          
       - name: Check output
         env:
           RELEASE_VERSION: ${{ steps.vars.outputs.tag }}
         run: |
-          echo $RELEASE_VERSION
-          echo ${{ steps.vars.outputs.tag }}
-      - uses: actions/checkout@v1
+          echo "Release version: $RELEASE_VERSION"
+          echo "Tag: ${{ steps.vars.outputs.tag }}"
+          echo "Build date: ${{ steps.vars.outputs.builddate }}"
+          
       - name: Publish to Registry
         uses: elgohr/Publish-Docker-Github-Action@v5
         with:
           registry: cr-hn-1.bizflycloud.vn
-          name: cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:${{ steps.vars.outputs.tag }}
+          name: 31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud
           username: ${{ secrets.USER_CLOUD }}
           password: ${{ secrets.PASS }}
+          tags: ${{ steps.vars.outputs.tag }},latest
+          buildargs: VERSION=${{ steps.vars.outputs.tag }},BUILDDATE=${{ steps.vars.outputs.builddate }}
