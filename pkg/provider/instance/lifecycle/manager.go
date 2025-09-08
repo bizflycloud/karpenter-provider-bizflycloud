@@ -309,7 +309,7 @@ func (m *Manager) buildMetadata(nodeClass *v1bizfly.BizflyCloudNodeClass, networ
 		"bke_cluster_token":    clusterToken,
 		"bke_join_endpoint":    joinEndpoint,
 		"bke_log_endpoint":     logEndpoint,
-		"bke_kubernetes_version": kubernetesVersion,
+		"kubernetes_version": kubernetesVersion,
 		"bke_node_everywhere":  "false",
 		"bke_node_localdns":    "false",
 		"bke_node_network_id":  networkID,
