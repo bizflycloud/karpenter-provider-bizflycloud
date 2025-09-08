@@ -301,19 +301,7 @@ func (m *Manager) buildMetadata(nodeClass *v1bizfly.BizflyCloudNodeClass, networ
 	clusterToken := os.Getenv("BKE_CLUSTER_TOKEN")
 	joinEndpoint := os.Getenv("BKE_JOIN_ENDPOINT")
 	logEndpoint := os.Getenv("BKE_LOG_ENDPOINT")
-
-	if clusterID == "" {
-		clusterID = "letbvcssxzusv4eg"
-	}
-	if clusterToken == "" {
-		clusterToken = "KgrtTbXkdCe9awWE6DDV2Rm4ENo6jPTY"
-	}
-	if joinEndpoint == "" {
-		joinEndpoint = fmt.Sprintf("http://engine.api.k8saas.bizflycloud.vn/engine/cluster_join/%s", clusterID)
-	}
-	if logEndpoint == "" {
-		logEndpoint = fmt.Sprintf("http://engine.api.k8saas.bizflycloud.vn/engine/cluster_log/%s", clusterID)
-	}
+	kubernetesVersion := os.Getenv("BKE_KUBERNETES_VERSION")
 
 	metadata := map[string]string{
 		"bizfly_cloud_service": "kubernetes_engine",
@@ -321,6 +309,7 @@ func (m *Manager) buildMetadata(nodeClass *v1bizfly.BizflyCloudNodeClass, networ
 		"bke_cluster_token":    clusterToken,
 		"bke_join_endpoint":    joinEndpoint,
 		"bke_log_endpoint":     logEndpoint,
+		"bke_kubernetes_version": kubernetesVersion,
 		"bke_node_everywhere":  "false",
 		"bke_node_localdns":    "false",
 		"bke_node_network_id":  networkID,
