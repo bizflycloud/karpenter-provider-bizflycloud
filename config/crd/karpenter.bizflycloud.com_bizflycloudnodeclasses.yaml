@@ -70,11 +70,6 @@ spec:
               imageId:
                 description: ImageID is the ID of the image to use for nodes
                 type: string
-              imageMapping:
-                description: ImageMapping maps Kubernetes versions to image IDs
-                type: object
-                additionalProperties:
-                  type: string
               metadataOptions:
                 default:
                   type: template

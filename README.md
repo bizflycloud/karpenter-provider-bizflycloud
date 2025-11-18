@@ -82,10 +82,6 @@ spec:
   diskTypes:
   - HDD
   - SSD
-  imageMapping:
-    v1.32.1: 5a821700-a184-4f91-8455-205d47d472c0
-    v1.31.5: 9083394c-0543-4d41-bd84-9207405d823c
-    v1.30.9: 052ff084-fdd2-4c23-bc54-943614c4cdcb
   metadataOptions:
     type: template
   networkPlans:

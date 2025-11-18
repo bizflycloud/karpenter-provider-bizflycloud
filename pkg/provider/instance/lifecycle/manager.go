@@ -1,19 +1,15 @@
 package lifecycle
 
 import (
-
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
-
-	"context"
-	"fmt"
-	"os"
 	"time"
-
-    "k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
-
 
 	"github.com/bizflycloud/gobizfly"
 	"github.com/go-logr/logr"
@@ -30,6 +26,22 @@ const (
 	pollInterval      = 15 * time.Second
 )
 
+// ControllerVersionWithImageID extends ControllerVersion to include worker_image_id field
+// This is needed because the gobizfly package doesn't include this field yet
+type ControllerVersionWithImageID struct {
+	ID              string   `json:"id"`
+	Name            string   `json:"name"`
+	Description     *string  `json:"description"`
+	KubernetesVersion string `json:"kubernetes_version"`
+	WorkerImageID   string   `json:"worker_image_id"`
+}
+
+// KubernetesVersionResponseWithImageID extends KubernetesVersionResponse to include worker_image_id
+type KubernetesVersionResponseWithImageID struct {
+	ControllerVersions []ControllerVersionWithImageID `json:"controller_versions"`
+	WorkerVersions     []string                       `json:"worker_versions"`
+}
+
 // Manager handles instance lifecycle operations
 type Manager struct {
 	Client       client.Client
@@ -39,6 +51,8 @@ type Manager struct {
 	Config       *v1bizfly.ProviderConfig
 	kubernetesVersion string
 	versionFetched    bool
+	k8sVersionsResponse *KubernetesVersionResponseWithImageID
+	k8sVersionsFetched   bool
 }
 
 type InstanceTypeSpec struct {
@@ -383,59 +397,132 @@ func (m *Manager) resolveImageID(nodeClaim *karpenterv1.NodeClaim, nodeClass *v1
 		return nodeClass.Spec.ImageID, nil
 	}
 
-	// If imageMapping is provided, try to resolve from Kubernetes version
-	if nodeClass != nil && len(nodeClass.Spec.ImageMapping) > 0 {
-		// Get Kubernetes version from NodeClaim requirements
-		kubeVersion := m.getKubernetesVersion(nodeClaim)
-		if kubeVersion == "" {
-			return "", fmt.Errorf("kubernetes version not found in NodeClaim requirements, cannot resolve image from mapping")
+	// Get Kubernetes version from NodeClaim requirements
+	kubeVersion := m.getKubernetesVersionFromRequirements(nodeClaim)
+	if kubeVersion == "" {
+		return "", fmt.Errorf("kubernetes version not found in NodeClaim requirements (key: bizflycloud.com/kubernetes-version), cannot resolve image ID")
+	}
+
+	// Fetch worker_image_id from Kubernetes Engine API
+	imageID, err := m.getWorkerImageIDFromAPI(kubeVersion)
+	if err != nil {
+		return "", fmt.Errorf("failed to get worker image ID for Kubernetes version %s: %w", kubeVersion, err)
+	}
+
+	m.Log.Info("Resolved image ID from Kubernetes Engine API",
+		"kubeVersion", kubeVersion,
+		"imageID", imageID)
+	return imageID, nil
+}
+
+
+// getKubernetesVersionFromRequirements extracts Kubernetes version from NodeClaim requirements
+func (m *Manager) getKubernetesVersionFromRequirements(nodeClaim *karpenterv1.NodeClaim) string {
+	for _, req := range nodeClaim.Spec.Requirements {
+		if req.Key == "bizflycloud.com/kubernetes-version" {
+			if len(req.Values) > 0 {
+				return req.Values[0]
+			}
+		}
+	}
+	return ""
+}
+
+// getWorkerImageIDFromAPI fetches worker_image_id from Kubernetes Engine API based on Kubernetes version
+func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string) (string, error) {
+	// Fetch Kubernetes versions from API if not already cached
+	if !m.k8sVersionsFetched {
+		ctx := context.Background()
+		opts := gobizfly.GetKubernetesVersionOpts{
+			All: nil, // Get all versions
 		}
 		
-		if imageID, exists := nodeClass.Spec.ImageMapping[kubeVersion]; exists {
-			m.Log.Info("Resolved image ID from version mapping", 
-				"kubeVersion", kubeVersion, 
-				"imageID", imageID)
-			return imageID, nil
-		}
-		return "", fmt.Errorf("no image mapping found for Kubernetes version %s", kubeVersion)
-	}
-
-	// No imageID or imageMapping provided - return error
-	return "", fmt.Errorf("either imageId or imageMapping must be specified in NodeClass")
-}
-
-
-func (m *Manager) getKubernetesVersion(nodeClaim *karpenterv1.NodeClaim) string {
-	if !m.versionFetched {
-		version, err := m.getKubernetesVersionFromAPIServer()
+		// Get the response from gobizfly
+		response, err := m.BizflyClient.KubernetesEngine.GetKubernetesVersion(ctx, opts)
 		if err != nil {
-			m.Log.Error(err, "Failed to get Kubernetes version from API server")
-			return ""
+			return "", fmt.Errorf("failed to get Kubernetes versions from API: %w", err)
 		}
-		m.kubernetesVersion = version
-		m.versionFetched = true
-		m.Log.Info("Cached Kubernetes version", "version", version)
+		
+		// Convert to our extended struct that includes worker_image_id
+		// We need to make a raw API call to get the full response with worker_image_id
+		// since gobizfly doesn't include it in the struct
+		extendedResponse, err := m.fetchKubernetesVersionsWithImageID(ctx, opts)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch Kubernetes versions with image ID: %w", err)
+		}
+		
+		m.k8sVersionsResponse = extendedResponse
+		m.k8sVersionsFetched = true
+		m.Log.Info("Fetched Kubernetes versions from API", "count", len(response.ControllerVersions))
 	}
-	return m.kubernetesVersion
+
+	// Normalize the version string (remove 'v' prefix if present, handle version format)
+	normalizedVersion := strings.TrimPrefix(kubeVersion, "v")
+	
+	// Search for matching controller version
+	for _, cv := range m.k8sVersionsResponse.ControllerVersions {
+		// Compare normalized versions
+		cvVersion := strings.TrimPrefix(cv.KubernetesVersion, "v")
+		
+		// Try exact match first
+		if cv.KubernetesVersion == kubeVersion || cvVersion == normalizedVersion {
+			if cv.WorkerImageID != "" {
+				return cv.WorkerImageID, nil
+			}
+		}
+		
+		// Try partial match (e.g., "1.32.9" matches "v1.32.9")
+		if strings.HasSuffix(cv.KubernetesVersion, normalizedVersion) || 
+		   strings.HasSuffix(cvVersion, normalizedVersion) {
+			if cv.WorkerImageID != "" {
+				return cv.WorkerImageID, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no worker_image_id found for Kubernetes version %s in API response", kubeVersion)
 }
 
-func (m *Manager) getKubernetesVersionFromAPIServer() (string, error) {
-	config, err := rest.InClusterConfig()
+// fetchKubernetesVersionsWithImageID makes a raw API call to get the full response including worker_image_id
+// This is a workaround because gobizfly's ControllerVersion struct doesn't include worker_image_id field
+func (m *Manager) fetchKubernetesVersionsWithImageID(ctx context.Context, opts gobizfly.GetKubernetesVersionOpts) (*KubernetesVersionResponseWithImageID, error) {
+	// Use the gobizfly client's NewRequest method to create the HTTP request
+	// Service name for Kubernetes Engine is "kubernetes"
+	// Path is "/k8s_versions" (from gobizfly source)
+	serviceName := "kubernetes"
+	path := "/k8s_versions"
+	
+	req, err := m.BizflyClient.NewRequest(ctx, http.MethodGet, serviceName, path, nil)
 	if err != nil {
-		return "", fmt.Errorf("failed to get in-cluster config: %w", err)
+		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-
-	clientset, err := kubernetes.NewForConfig(config)
+	
+	// Add query parameters if needed
+	if opts.All != nil {
+		q := req.URL.Query()
+		q.Add("all", strconv.FormatBool(*opts.All))
+		req.URL.RawQuery = q.Encode()
+	}
+	
+	// Execute the request using the client's Do method
+	resp, err := m.BizflyClient.Do(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("failed to create clientset: %w", err)
+		return nil, fmt.Errorf("failed to execute request: %w", err)
 	}
-
-	versionInfo, err := clientset.Discovery().ServerVersion()
-	if err != nil {
-		return "", fmt.Errorf("failed to get server version: %w", err)
+	defer resp.Body.Close()
+	
+	// Check for HTTP errors
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status code %d", resp.StatusCode)
 	}
-
-	return versionInfo.GitVersion, nil
+	
+	// Decode the full JSON response into our extended struct that includes worker_image_id
+	var response KubernetesVersionResponseWithImageID
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	
+	return &response, nil
 }
 
 
