@@ -264,6 +264,11 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
         "serverID", server.ID,
         "status", server.Status)
 
+    if err := m.UpdateNodeClaimStatus(ctx, nodeClaim, server, imageID); err != nil {
+        m.Log.Error(err, "Failed to update NodeClaim status (non-fatal)", 
+            "nodeClaim", nodeClaim.Name)
+    }
+
     return server, nil
 }
 
@@ -738,4 +743,29 @@ func (m *Manager) getRequirementKeys(reqs []karpenterv1.NodeSelectorRequirementW
         keys[i] = req.Key
     }
     return keys
+}
+
+// UpdateNodeClaimStatus updates the NodeClaim status with instance details including imageID
+func (m *Manager) UpdateNodeClaimStatus(ctx context.Context, nodeClaim *karpenterv1.NodeClaim, server *gobizfly.Server, imageID string) error {
+    // Create a copy to modify
+    nodeClaimCopy := nodeClaim.DeepCopy()
+    
+    // Update the status fields
+    if nodeClaimCopy.Status.ImageID == "" {
+        nodeClaimCopy.Status.ImageID = imageID
+        m.Log.Info("Setting NodeClaim imageID", 
+            "nodeClaim", nodeClaim.Name, 
+            "imageID", imageID)
+    }
+    
+    // Patch the status
+    if err := m.Client.Status().Patch(ctx, nodeClaimCopy, client.MergeFrom(nodeClaim)); err != nil {
+        return fmt.Errorf("failed to update NodeClaim status: %w", err)
+    }
+    
+    m.Log.Info("Successfully updated NodeClaim status",
+        "nodeClaim", nodeClaim.Name,
+        "imageID", imageID)
+    
+    return nil
 }
