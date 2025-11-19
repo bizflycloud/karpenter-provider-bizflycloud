@@ -56,27 +56,13 @@ func NewOperator(ctx context.Context, operator *coreoperator.Operator) (context.
 // loadConfigFromEnv loads the provider configuration from environment variables
 func loadConfigFromEnv() *v1.ProviderConfig {
 	region := os.Getenv("BIZFLY_CLOUD_REGION")
-	if region == "" {
-		region = "HN"
-	}
-
 	zone := os.Getenv("BIZFLY_CLOUD_ZONE")
-	if zone == "" {
-		zone = "HN1"
-	}
 
-	imageID := os.Getenv("BIZFLY_CLOUD_IMAGE_ID")
-	if imageID == "" {
-		imageID = "5a821700-a184-4f91-8455-205d47d472c0" // Default Ubuntu image
-	}
 
 	return &v1.ProviderConfig{
 		Spec: v1.ProviderConfigSpec{
 			Region: region,
 			Zone:   zone,
-			ImageConfig: &v1.ImageConfigSpec{
-				ImageID: imageID,
-			},
 		},
 	}
 }

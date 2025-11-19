@@ -2,7 +2,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.15.0 # Ensure this version is compatible or update as needed
+    controller-gen.kubebuilder.io/version: v0.15.0
   name: bizflycloudnodeclasses.karpenter.bizflycloud.com
 spec:
   group: karpenter.bizflycloud.com
@@ -30,10 +30,10 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
-    - jsonPath: .spec.nodeCategories # Updated path
-      name: Categories # Renamed column for clarity, optional
+    - jsonPath: .spec.nodeCategories
+      name: Categories
       priority: 1
-      type: string # This will display the array as a string, e.g., ["basic", "premium"]
+      type: string
     schema:
       openAPIV3Schema:
         description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass API
@@ -58,18 +58,14 @@ spec:
           spec:
             description: BizflyCloudNodeClassSpec defines the desired state of BizflyCloudNodeClass
             properties:
-              diskTypes: # Renamed from diskType
+              diskTypes:
                 description: DiskTypes specifies the types of disks to use (e.g., ["SSD", "HDD"]).
-                type: array # Changed to array
+                type: array
                 items:
                   type: string
                   enum:
                   - SSD
                   - HDD
-                # Default removed, handle in controller or CRD defaults if needed for items
-              imageId:
-                description: ImageID is the ID of the image to use for nodes
-                type: string
               metadataOptions:
                 default:
                   type: template
@@ -88,9 +84,9 @@ spec:
                   enum:
                   - free_datatransfer
                   - free_bandwidth
-              nodeCategories: # Renamed from nodeCategory
+              nodeCategories:
                 description: NodeCategories specifies the categories of nodes to provision.
-                type: array # Changed to array
+                type: array
                 items:
                   type: string
                   enum:
@@ -98,7 +94,13 @@ spec:
                   - premium
                   - enterprise
                   - dedicated
-                # Default removed, handle in controller or CRD defaults if needed for items
+              osType:
+                description: OSType specifies the operating system for the nodes (flatcar or ubuntu)
+                type: string
+                default: ubuntu
+                enum:
+                - flatcar
+                - ubuntu
               placementStrategy:
                 description: |-
                   PlacementStrategy defines how nodes should be placed across zones
@@ -154,7 +156,7 @@ spec:
                 type: array
               zones:
                 description: |-
-                  Zones is the list of availability zones where nodes can be created... If not specified, zones will be automatically selected based on placement strategy
+                  Zones is the list of availability zones where nodes can be created. If not specified, zones will be automatically selected based on placement strategy
                 items:
                   type: string
                 type: array
@@ -240,4 +242,3 @@ spec:
                 type: array
             type: object
         type: object
-
