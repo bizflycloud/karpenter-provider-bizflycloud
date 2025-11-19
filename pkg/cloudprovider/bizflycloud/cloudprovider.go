@@ -49,6 +49,7 @@ const (
 	NodeAnnotationIsSpot  = "karpenter.bizflycloud.sh/instance-spot"
 	NodeLabelImageID      = "karpenter.bizflycloud.sh/image-id"
 	NodeCategoryLabel     = "karpenter.bizflycloud.com/node-category"
+	OSTypeLabel     	  = "karpenter.bizflycloud.com/os-type"
 
 	// Drift reasons
 	DriftReasonNodeNotFound     = "NodeNotFound"
@@ -377,11 +378,14 @@ func (p *cloudProviderImpl) setRequiredLabels(nodeClaim *v1.NodeClaim, instanceT
 	nodeClaim.Labels[NodeLabelRegion] = p.region
 
     // DYNAMIC: Get values from NodeClaim requirements instead of hardcoding
-    p.setLabelFromRequirements(nodeClaim, "karpenter.sh/capacity-type", "saving-plan")
-    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/disk-type", "HDD")
-    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/node-category", "basic")
-    p.setLabelFromRequirements(nodeClaim, "bizflycloud.com/kubernetes-version", "v1.32.1")
-    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/bizflycloudnodeclass", "default")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.sh/capacity-type", "")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/disk-type", "")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/node-category", "")
+    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/bizflycloudnodeclass", "")
+	p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/os-type", "")
+	p.setLabelFromRequirements(nodeClaim, "bizflycloud.com/kubernetes-version", "")
+	p.setLabelFromRequirements(nodeClaim, "topology.kubernetes.io/zone", "")
+
     p.setLabelFromRequirements(nodeClaim, corev1.LabelTopologyZone, p.zone)
     
     // Get nodepool name from owner references dynamically
@@ -804,6 +808,16 @@ func (p *cloudProviderImpl) convertNodeSpecToNodeClaim(nodeSpec *corev1.Node) *v
 		})
 	}
 
+	if osType, exists := nodeSpec.Labels["karpenter.bizflycloud.com/os-type"]; exists {
+		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: corev1.NodeSelectorRequirement{
+				Key:      "karpenter.bizflycloud.com/os-type",
+				Operator: corev1.NodeSelectorOpIn,
+				Values:   []string{osType},
+			},
+		})
+	}
+	
 	if nodeCategory, exists := nodeSpec.Labels["karpenter.bizflycloud.com/node-category"]; exists {
 		requirements = append(requirements, v1.NodeSelectorRequirementWithMinValues{
 			NodeSelectorRequirement: corev1.NodeSelectorRequirement{

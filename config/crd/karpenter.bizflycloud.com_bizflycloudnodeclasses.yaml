@@ -96,11 +96,12 @@ spec:
                   - dedicated
               osType:
                 description: OSType specifies the operating system for the nodes (flatcar or ubuntu)
-                type: string
-                default: ubuntu
-                enum:
-                - flatcar
-                - ubuntu
+                type: array
+                items:
+                  type: string
+                  enum:
+                  - flatcar
+                  - ubuntu
               placementStrategy:
                 description: |-
                   PlacementStrategy defines how nodes should be placed across zones

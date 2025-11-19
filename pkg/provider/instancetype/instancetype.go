@@ -17,7 +17,8 @@ import (
 
 const (
 	NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
-	DiskTypeLabel = "karpenter.bizflycloud.com/disk-type"
+	DiskTypeLabel 		= "karpenter.bizflycloud.com/disk-type"
+	OSTypeLabel    		  = "karpenter.bizflycloud.com/os-type"
 )
 
 type Provider interface {

@@ -15,6 +15,7 @@ const (
 	NodeLabelZone         = "topology.kubernetes.io/zone"
 	NodeAnnotationIsSpot  = "karpenter.bizflycloud.sh/instance-spot"
 	NodeCategoryLabel     = "karpenter.bizflycloud.com/node-category"
+	OSTypeLabel    		  = "karpenter.bizflycloud.com/os-type"
 )
 
 // ConvertToNode converts a BizFly Cloud server instance to a Kubernetes node
