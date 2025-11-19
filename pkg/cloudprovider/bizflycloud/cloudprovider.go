@@ -268,7 +268,10 @@ func (p *cloudProviderImpl) IsDrifted(ctx context.Context, nodeClaim *v1.NodeCla
 		return "", err
 	}
 
-	instanceProvider := p.createInstanceProvider()
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return "", fmt.Errorf("failed to create instance provider: %w", err)
+	}
 	inst, err := instanceProvider.GetInstance(ctx, instanceID)
 	if err != nil {
 		if errors.IsNotFoundError(err) {
@@ -316,7 +319,10 @@ func (p *cloudProviderImpl) RepairPolicies() []cloudprovider.RepairPolicy {
 
 // Get retrieves a NodeClaim by instance ID
 func (p *cloudProviderImpl) Get(ctx context.Context, id string) (*v1.NodeClaim, error) {
-	instanceProvider := p.createInstanceProvider()
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create instance provider: %w", err)
+	}
 	inst, err := instanceProvider.GetInstance(ctx, id)
 	if err != nil {
 		return nil, err
@@ -427,8 +433,11 @@ func (p *cloudProviderImpl) deleteCloudResources(ctx context.Context, nodeClaim 
 		return err
 	}
 
-	instanceProvider := p.createInstanceProvider()
-	return instanceProvider.DeleteInstance(ctx, instanceID)
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return fmt.Errorf("failed to create instance provider: %w", err)
+	}
+	return instanceProvider.DeleteInstance(ctx, instanceID)	
 }
 
 func (p *cloudProviderImpl) handleStuckFinalizers(ctx context.Context, nodeClaim *v1.NodeClaim) {
@@ -461,15 +470,20 @@ func (p *cloudProviderImpl) handleStuckFinalizers(ctx context.Context, nodeClaim
 	}
 }
 
-func (p *cloudProviderImpl) createInstanceProvider() *instance.Provider {
-	return instance.NewProvider(
-		p.kubeClient,
-		p.log.Logger,
-		p.bizflyClient,
-		p.region,
-		p.config,
-	)
+func (p *cloudProviderImpl) createInstanceProvider() (*instance.Provider, error) {
+    provider, err := instance.NewProvider(
+        p.kubeClient,
+        p.log.Logger,
+        p.bizflyClient,
+        p.region,
+        p.config,
+    )
+    if err != nil {
+        return nil, fmt.Errorf("failed to create instance provider: %w", err)
+    }
+    return provider, nil
 }
+
 
 func (p *cloudProviderImpl) isInstanceInTerminalState(status string) bool {
 	terminalStates := []string{"ERROR", "DELETED", "SHUTOFF", "SUSPENDED"}
@@ -532,7 +546,10 @@ func (p *cloudProviderImpl) CreateNode(ctx context.Context, nodeSpec *corev1.Nod
 	nodeClaim := p.convertNodeSpecToNodeClaim(nodeSpec)
 
 	// Create the instance
-	instanceProvider := p.createInstanceProvider()
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create instance provider: %w", err)
+	}
 	gobizflyServer, err := instanceProvider.CreateInstance(ctx, nodeClaim, nodeClass)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %w", err)
@@ -612,7 +629,10 @@ func (p *cloudProviderImpl) DeleteNode(ctx context.Context, node *corev1.Node) e
 	}
 
 	// Delete the instance
-	instanceProvider := p.createInstanceProvider()
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return fmt.Errorf("failed to create instance provider: %w", err)
+	}
 	err = instanceProvider.DeleteInstance(ctx, instanceID)
 	if err != nil {
 		// Check if the error is because the instance doesn't exist
@@ -653,7 +673,10 @@ func (p *cloudProviderImpl) DetectNodeDrift(ctx context.Context, node *corev1.No
 	}
 
 	// Get the instance
-	instanceProvider := p.createInstanceProvider()
+	instanceProvider, err := p.createInstanceProvider()
+	if err != nil {
+		return false, fmt.Errorf("failed to create instance provider: %w", err)
+	}
 	instance, err := instanceProvider.GetInstance(ctx, instanceID)
 	if err != nil {
 		// If the instance is not found, it's definitely drifted

@@ -24,17 +24,20 @@ type Provider struct {
 }
 
 // NewProvider creates a new instance provider
-func NewProvider(client client.Client, log logr.Logger, bizflyClient *gobizfly.Client, region string, config *v1bizfly.ProviderConfig) *Provider {
-	lifecycleManager := lifecycle.NewManager(client, log, bizflyClient, region, config)
-	
-	return &Provider{
-		Client:           client,
-		Log:              log,
-		BizflyClient:     bizflyClient,
-		Region:           region,
-		Config:           config,
-		LifecycleManager: lifecycleManager,
-	}
+func NewProvider(client client.Client, log logr.Logger, bizflyClient *gobizfly.Client, region string, config *v1bizfly.ProviderConfig) (*Provider, error) {
+    lifecycleManager, err := lifecycle.NewManager(client, log, bizflyClient, region, config)
+    if err != nil {
+        return nil, fmt.Errorf("failed to create lifecycle manager: %w", err)
+    }
+    
+    return &Provider{
+        Client:           client,
+        Log:              log,
+        BizflyClient:     bizflyClient,
+        Region:           region,
+        Config:           config,
+        LifecycleManager: lifecycleManager,
+    }, nil
 }
 
 // CreateInstance creates a new BizFly Cloud server instance and waits for it to be ready
