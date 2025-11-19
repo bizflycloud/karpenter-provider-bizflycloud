@@ -39,10 +39,6 @@ type BizflyCloudNodeClassSpec struct {
 	// ImageID is the ID of the image to use for nodes
 	// +optional
 	ImageID string `json:"imageId,omitempty"`
-	
-	// ImageMapping maps Kubernetes versions to image IDs
-	// +optional
-	ImageMapping map[string]string `json:"imageMapping,omitempty"`
 
 	// SSHKeyName is the name of the SSH key pair to use for instances
 	// +optional
