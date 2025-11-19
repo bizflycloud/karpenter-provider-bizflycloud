@@ -43,7 +43,7 @@ type BizflyCloudNodeClassSpec struct {
     // +kubebuilder:validation:Enum=flatcar;ubuntu
     // +kubebuilder:default=ubuntu
     // +optional
-    OSType string `json:"osType,omitempty"`
+    OSType []string `json:"osType"`
 
 
     // NodeCategories specifies the category of nodes to provision

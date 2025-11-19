@@ -71,6 +71,7 @@ const (
     NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
     DiskTypeLabel     = "karpenter.bizflycloud.com/disk-type"
     NetworkPlanLabel  = "karpenter.bizflycloud.com/network-plan"
+    OSTypeLabel       = "karpenter.bizflycloud.com/os-type"
 )
 
 // NewManager creates a new instance lifecycle manager
@@ -125,6 +126,13 @@ func normalizeVersion(version string) string {
 
 // CreateInstance creates a new BizFly Cloud server instance and waits for it to be ready
 func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.NodeClaim, nodeClass *v1bizfly.BizflyCloudNodeClass) (*gobizfly.Server, error) {
+
+    // Debug: Log all requirements
+    m.Log.Info("NodeClaim full spec before CreateInstance", "NodeClaim", nodeClaim)
+    m.Log.Info("NodeClaim requirements debug:")
+    for i, req := range nodeClaim.Spec.Requirements {
+        m.Log.Info("Requirement", "index", i, "key", req.Key, "operator", req.Operator, "values", req.Values)
+    }
     // Extract instance type
     instanceTypeName, err := m.getSmallestInstanceType(nodeClaim)
     if err != nil {
@@ -136,13 +144,6 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
     if err != nil {
         return nil, fmt.Errorf("failed to resolve image ID: %w", err)
     }
-
-    // Debug: Log all requirements
-    m.Log.Info("NodeClaim requirements debug:")
-    for i, req := range nodeClaim.Spec.Requirements {
-        m.Log.Info("Requirement", "index", i, "key", req.Key, "operator", req.Operator, "values", req.Values)
-    }
-
     // Get disk type from requirements
     diskType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, DiskTypeLabel)
     if !ok {
@@ -443,16 +444,33 @@ func (m *Manager) resolveImageID(ctx context.Context, nodeClaim *karpenterv1.Nod
         return "", fmt.Errorf("failed to get cluster Kubernetes version: %w", err)
     }
 
-    imageID, err := m.getWorkerImageIDFromAPI(kubeVersion)
+    // Try to get OS type from NodeClaim requirements
+    osType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, OSTypeLabel)
+    m.Log.Info("OS type found in requirements", "osType", osType)
+    if !ok {
+        if val, exists := nodeClaim.Labels[OSTypeLabel]; exists {
+            osType = val
+            m.Log.Info("OS type found in labels fallback", "osType", osType)
+            ok = true
+        }
+    }
+    
+
+    m.Log.Info("Resolving image ID", "kubeVersion", kubeVersion, "osType", osType)
+
+    imageID, err := m.getWorkerImageIDFromAPI(kubeVersion, osType)
     if err != nil {
-        return "", fmt.Errorf("failed to get worker image ID for Kubernetes version %s: %w", kubeVersion, err)
+        return "", fmt.Errorf("failed to get worker image ID for Kubernetes version %s with OS %s: %w", kubeVersion, osType, err)
     }
 
-    m.Log.Info("Resolved image ID from Kubernetes Engine API", "kubeVersion", kubeVersion, "imageID", imageID)
+    m.Log.Info("Resolved image ID from Kubernetes Engine API", 
+        "kubeVersion", kubeVersion, 
+        "osType", osType,
+        "imageID", imageID)
     return imageID, nil
 }
 
-func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string) (string, error) {
+func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string, osType string) (string, error) {
     if !m.k8sVersionsFetched {
         ctx := context.Background()
         opts := gobizfly.GetKubernetesVersionOpts{
@@ -475,50 +493,114 @@ func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string) (string, error) {
 
     var candidates []gobizfly.ControllerVersion
 
-	for _, cv := range m.k8sVersionsResponse.ControllerVersions {
-		if cv.K8SVersion == kubeVersion {
-			if cv.WorkerImageID != "" {
-				return cv.WorkerImageID, nil // Trả về đúng worker_image_id
-			}
-		}
-	}
-
-    // Collect all with matching major.minor version
+    // First, try exact match with OS type
     for _, cv := range m.k8sVersionsResponse.ControllerVersions {
-        // Parse version from Name field (e.g., "v1.33.5-68c8dab9" -> "v1.33.5")
-        versionPart := strings.Split(cv.Name, "-")[0]
-        normalizedCV := normalizeVersion(versionPart)
+        versionToCheck := cv.K8SVersion
+        
+        if osType == "flatcar" {
+            // Must have .flatcar suffix
+            if strings.HasSuffix(versionToCheck, ".flatcar") {
+                // Remove .flatcar and compare base version
+                baseVersion := strings.TrimSuffix(versionToCheck, ".flatcar")
+                if baseVersion == kubeVersion {
+                    if cv.WorkerImageID != "" {
+                        m.Log.Info("Exact match found for flatcar",
+                            "requestedVersion", kubeVersion,
+                            "matchedVersion", cv.K8SVersion,
+                            "imageID", cv.WorkerImageID)
+                        return cv.WorkerImageID, nil
+                    }
+                }
+            }
+        } else {
+            // Ubuntu - must NOT have .flatcar suffix
+            if !strings.HasSuffix(versionToCheck, ".flatcar") {
+                if versionToCheck == kubeVersion {
+                    if cv.WorkerImageID != "" {
+                        m.Log.Info("Exact match found for ubuntu",
+                            "requestedVersion", kubeVersion,
+                            "matchedVersion", cv.K8SVersion,
+                            "imageID", cv.WorkerImageID)
+                        return cv.WorkerImageID, nil
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect all with matching major.minor version and OS type
+    for _, cv := range m.k8sVersionsResponse.ControllerVersions {
+        k8sVersion := cv.K8SVersion
+        
+        // Filter by OS type first
+        if osType == "flatcar" {
+            if !strings.HasSuffix(k8sVersion, ".flatcar") {
+                continue // Skip non-flatcar versions
+            }
+            // Remove .flatcar suffix to get the base version
+            k8sVersion = strings.TrimSuffix(k8sVersion, ".flatcar")
+        } else {
+            if strings.HasSuffix(k8sVersion, ".flatcar") {
+                continue // Skip flatcar versions when looking for ubuntu
+            }
+        }
+        
+        // Now parse the base version (e.g., "v1.31.13")
+        normalizedCV := normalizeVersion(k8sVersion)
         cvSemver, err := semver.Parse(normalizedCV)
         if err != nil {
-            m.Log.Info("Skipping invalid semver version", "version", cv.Name)
+            m.Log.Info("Skipping invalid semver version", 
+                "k8sVersion", cv.K8SVersion, 
+                "normalizedVersion", normalizedCV,
+                "error", err.Error())
             continue
         }
+        
+        // Match major.minor (patch can be different)
         if cvSemver.Major == targetSemver.Major && cvSemver.Minor == targetSemver.Minor {
             candidates = append(candidates, cv)
+            m.Log.Info("Added candidate version",
+                "k8sVersion", cv.K8SVersion,
+                "parsedVersion", fmt.Sprintf("%d.%d.%d", cvSemver.Major, cvSemver.Minor, cvSemver.Patch))
         }
     }
 
     if len(candidates) == 0 {
-        return "", fmt.Errorf("no matching worker image ID found for Kubernetes version %s (no matching major.minor)", kubeVersion)
+        return "", fmt.Errorf("no matching worker image ID found for Kubernetes version %s with OS type %s (no matching major.minor)", kubeVersion, osType)
     }
 
-    // Sort candidates by patch descending (latest patch version)
+    // Sort candidates by patch version descending (latest patch first)
     sort.Slice(candidates, func(i, j int) bool {
-        vi, _ := semver.Parse(normalizeVersion(strings.Split(candidates[i].Name, "-")[0]))
-        vj, _ := semver.Parse(normalizeVersion(strings.Split(candidates[j].Name, "-")[0]))
+        // Parse versions for comparison
+        versionI := candidates[i].K8SVersion
+        versionJ := candidates[j].K8SVersion
+        
+        // Remove .flatcar suffix if present
+        versionI = strings.TrimSuffix(versionI, ".flatcar")
+        versionJ = strings.TrimSuffix(versionJ, ".flatcar")
+        
+        // Normalize and parse
+        vi, errI := semver.Parse(normalizeVersion(versionI))
+        vj, errJ := semver.Parse(normalizeVersion(versionJ))
+        
+        // Handle parse errors gracefully
+        if errI != nil || errJ != nil {
+            return false
+        }
+        
+        // Sort by patch descending (higher patch = newer)
         return vi.Patch > vj.Patch
     })
 
     candidate := candidates[0]
-    m.Log.Info("Matched Kubernetes version with closest patch",
+    m.Log.Info("Matched Kubernetes version with latest patch",
         "requestedVersion", kubeVersion,
-        "matchedName", candidate.Name,
+        "osType", osType,
+        "matchedK8SVersion", candidate.K8SVersion,
         "imageID", candidate.WorkerImageID)
     
-    return candidate.WorkerImageID, nil // Return the ID field which should contain the worker_image_id
+    return candidate.WorkerImageID, nil
 }
-
-
 
 // fetchKubernetesVersionsWithImageID makes a raw API call to get the full response including worker_image_id
 // This is a workaround because gobizfly's ControllerVersion struct doesn't include worker_image_id field
@@ -729,13 +811,14 @@ func getValueFromRequirements(reqs []karpenterv1.NodeSelectorRequirementWithMinV
     for _, req := range reqs {
         if req.Key == key {
             if len(req.Values) > 0 {
-                // Return the first value found for the requirement
+                fmt.Printf("Requirement matched key %s with value %s\n", key, req.Values[0])
                 return req.Values[0], true
             }
         }
     }
     return "", false
 }
+
 
 func (m *Manager) getRequirementKeys(reqs []karpenterv1.NodeSelectorRequirementWithMinValues) []string {
     keys := make([]string, len(reqs))
