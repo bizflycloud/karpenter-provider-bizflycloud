@@ -111,7 +111,13 @@ spec:
         image: cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d/karpenter-provider-bizflycloud:v1.2.2-beta.1
         imagePullPolicy: IfNotPresent
         name: karpenter
-        resources: {}
+        resources: 
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1024Mi
         terminationMessagePath: /dev/termination-log
         terminationMessagePolicy: File
       dnsPolicy: ClusterFirst
