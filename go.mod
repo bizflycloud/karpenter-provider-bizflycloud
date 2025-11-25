@@ -3,7 +3,7 @@ module github.com/bizflycloud/karpenter-provider-bizflycloud
 go 1.24.2
 
 require (
-	github.com/bizflycloud/gobizfly v1.1.24
+	github.com/bizflycloud/gobizfly v1.1.25
 	github.com/blang/semver/v4 v4.0.0
 	github.com/go-logr/logr v1.4.2
 	github.com/prometheus/client_golang v1.22.0

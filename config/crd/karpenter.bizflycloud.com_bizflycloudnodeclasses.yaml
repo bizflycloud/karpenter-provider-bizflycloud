@@ -34,6 +34,10 @@ spec:
       name: Categories
       priority: 1
       type: string
+    - jsonPath: .spec.cpuVendors
+      name: CPU Vendors
+      priority: 1
+      type: string
     schema:
       openAPIV3Schema:
         description: BizflyCloudNodeClass is the Schema for the BizflyCloudNodeClass API
@@ -58,6 +62,14 @@ spec:
           spec:
             description: BizflyCloudNodeClassSpec defines the desired state of BizflyCloudNodeClass
             properties:
+              cpuVendors:
+                description: CPUVendors specifies the CPU vendors to use (e.g., Intel2, AMD4)
+                type: array
+                items:
+                  type: string
+                  enum:
+                  - Intel2
+                  - AMD4
               diskTypes:
                 description: DiskTypes specifies the types of disks to use (e.g., ["SSD", "HDD"]).
                 type: array

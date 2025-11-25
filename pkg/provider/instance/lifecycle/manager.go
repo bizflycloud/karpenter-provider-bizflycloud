@@ -5,17 +5,17 @@ import (
     "fmt"
     "sort"
     "strings"
-	"time"
-	"os"
-	"net/http"
-	"strconv"
-	"encoding/json"
+    "time"
+    "os"
+    "net/http"
+    "strconv"
+    "encoding/json"
 
     "github.com/blang/semver/v4"
     "github.com/bizflycloud/gobizfly"
     "github.com/go-logr/logr"
     v1bizfly "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/apis/v1"
-	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/utils"
+    "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/utils"
     "sigs.k8s.io/controller-runtime/pkg/client"
     "sigs.k8s.io/controller-runtime/pkg/client/config"
     karpenterv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
@@ -30,24 +30,32 @@ const (
 )
 
 // ControllerVersionWithImageID extends ControllerVersion to include worker_image_id field
-// This is needed because the gobizfly package doesn't include this field yet
 type ControllerVersion struct {
     ID                string  
     Name              string  
     Description       *string 
-    K8SVersion string  `json:"kubernetes_version"`
+    K8SVersion        string  `json:"kubernetes_version"`
     WorkerImageID     string  `json:"worker_image_id"`
 }
 
 // KubernetesVersionResponseWithImageID extends KubernetesVersionResponse to include worker_image_id
 type KubernetesVersionResponseWithImageID struct {
-    ControllerVersions []ControllerVersion   		  `json:"controller_versions"`
-    WorkerVersions     []string                       `json:"worker_versions"`
+    ControllerVersions []ControllerVersion `json:"controller_versions"`
+    WorkerVersions     []string            `json:"worker_versions"`
+}
+
+// InstanceTypeSpec represents parsed instance type information
+type InstanceTypeSpec struct {
+    Name      string
+    CPU       int
+    RAM       int
+    Tier      string
+    CPUVendor string // e.g., "Intel2", "AMD4"
 }
 
 // Manager handles instance lifecycle operations
-
 type Manager struct {
+    ClusterID           string
     Client              client.Client
     Log                 logr.Logger
     BizflyClient        *gobizfly.Client
@@ -60,18 +68,13 @@ type Manager struct {
     k8sVersionsFetched  bool
 }
 
-type InstanceTypeSpec struct {
-    Name string
-    CPU  int
-    RAM  int
-    Tier string
-}
-
 const (
+    CapacityTypeLabel = "karpenter.sh/capacity-type"
     NodeCategoryLabel = "karpenter.bizflycloud.com/node-category"
     DiskTypeLabel     = "karpenter.bizflycloud.com/disk-type"
     NetworkPlanLabel  = "karpenter.bizflycloud.com/network-plan"
     OSTypeLabel       = "karpenter.bizflycloud.com/os-type"
+    CPUVendorLabel    = "karpenter.bizflycloud.com/cpu-vendor"
 )
 
 // NewManager creates a new instance lifecycle manager
@@ -133,6 +136,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
     for i, req := range nodeClaim.Spec.Requirements {
         m.Log.Info("Requirement", "index", i, "key", req.Key, "operator", req.Operator, "values", req.Values)
     }
+    
     // Extract instance type
     instanceTypeName, err := m.getSmallestInstanceType(nodeClaim)
     if err != nil {
@@ -144,6 +148,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
     if err != nil {
         return nil, fmt.Errorf("failed to resolve image ID: %w", err)
     }
+    
     // Get disk type from requirements
     diskType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, DiskTypeLabel)
     if !ok {
@@ -176,12 +181,11 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
 
     nodeName := nodeClaim.Name
 
-    // Determine server type
-    // FIX: Use the plural 'NodeCategories' field and select the first element.
+    // Get server type (category) from requirements
     if len(nodeClass.Spec.NodeCategories) == 0 {
         return nil, fmt.Errorf("nodeCategories must be specified in NodeClass")
     }
-    // Get server type (category) from requirements
+    
     serverType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, NodeCategoryLabel)
     if !ok {
         return nil, fmt.Errorf("node category not found in node claim requirements, ensure '%s' is specified in NodePool", NodeCategoryLabel)
@@ -197,6 +201,33 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
             return nil, fmt.Errorf("network plan not found in requirements and none specified in NodeClass")
         }
     }
+    
+    // Get capacity type (billing plan) from BizflyCloud-specific label
+    // SDK expects: "on_demand" or "saving_plan"
+    capacityType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, CapacityTypeLabel)
+    var billingPlan string
+    if !ok || capacityType == "" {
+        // Default to on_demand
+        billingPlan = "on_demand"
+        m.Log.Info("Capacity type not specified, defaulting to on_demand", 
+            "label", CapacityTypeLabel,
+            "billingPlan", billingPlan)
+    } else {
+        // Use the value directly (on_demand or saving_plan)
+        billingPlan = capacityType
+        m.Log.Info("Capacity type from requirements", 
+            "capacityType", capacityType, 
+            "billingPlan", billingPlan)
+    }
+    
+    // Validate billing plan
+    if billingPlan != "on_demand" && billingPlan != "saving_plan" {
+        m.Log.Info("Invalid capacity type, defaulting to on_demand", 
+            "capacityType", capacityType,
+            "validValues", []string{"on_demand", "saving_plan"})
+        billingPlan = "on_demand"
+    }
+    
     // Prepare metadata
     metadata := m.buildMetadata(nodeClass, vpcNetworkIDs[0])
     userData := "#!/bin/bash\n/opt/bizfly-kubernetes-engine/bootstrap.sh"
@@ -210,6 +241,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
         "imageID", imageID,
         "zone", selectedZone,
         "serverType", serverType,
+        "billingPlan", billingPlan,
         "vpcNetworkIDs", vpcNetworkIDs,
         "sshKey", sshKey)
 
@@ -223,6 +255,7 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
         IsCreatedWan:     utils.BoolPtr(true),
         UserData:         userData,
         Metadata:         metadata,
+        BillingPlan:      billingPlan, // "on_demand" or "saving_plan"
         OS: &gobizfly.ServerOS{
             Type: "image",
             ID:   imageID,
@@ -263,7 +296,8 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
     m.Log.Info("Server created successfully",
         "name", nodeName,
         "serverID", server.ID,
-        "status", server.Status)
+        "status", server.Status,
+        "billingPlan", billingPlan)
 
     if err := m.UpdateNodeClaimStatus(ctx, nodeClaim, server, imageID); err != nil {
         m.Log.Error(err, "Failed to update NodeClaim status (non-fatal)", 
@@ -314,6 +348,7 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
 
     nodeName := server.Name
     m.Log.Info("Retrieved node name from server details", "nodeName", nodeName, "instanceID", instanceID)
+    
     // Instance exists, proceed with deletion
     _, err = m.BizflyClient.CloudServer.Delete(ctx, instanceID, nil)
     if err != nil {
@@ -334,17 +369,12 @@ func (m *Manager) DeleteInstance(ctx context.Context, instanceID string) error {
     if clusterID != "" {
         m.Log.Info("Performing BKE cluster cleanup for node", "nodeName", nodeName, "clusterID", clusterID)
 
-        // The request struct is `ClusterLeaveRequest` with a `NodeName` field, as per the function signature provided.
         leaveReq := &gobizfly.ClusterLeaveRequest{
             NodeName: nodeName,
         }
 
-        // The correct method is `ClusterLeave`, and it takes the token as a separate parameter.
-        // The second `err` uses `=` instead of `:=` because `err` is already declared in this scope.
         _, err = m.BizflyClient.KubernetesEngine.ClusterLeave(ctx, clusterID, token, leaveReq)
         if err != nil {
-            // The `logr.Logger` interface does not have a `Warn` method[2].
-            // We log this as `Info` because it's a non-fatal error; the primary resource is deleted.
             m.Log.Info("Failed to remove node from BKE cluster (non-fatal, manual cleanup may be required)", "error", err.Error(), "nodeName", nodeName)
         } else {
             m.Log.Info("Successfully removed node from BKE cluster", "nodeName", nodeName)
@@ -454,7 +484,6 @@ func (m *Manager) resolveImageID(ctx context.Context, nodeClaim *karpenterv1.Nod
             ok = true
         }
     }
-    
 
     m.Log.Info("Resolving image ID", "kubeVersion", kubeVersion, "osType", osType)
 
@@ -603,11 +632,7 @@ func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string, osType string) (st
 }
 
 // fetchKubernetesVersionsWithImageID makes a raw API call to get the full response including worker_image_id
-// This is a workaround because gobizfly's ControllerVersion struct doesn't include worker_image_id field
 func (m *Manager) fetchKubernetesVersionsWithImageID(ctx context.Context, opts gobizfly.GetKubernetesVersionOpts) (*KubernetesVersionResponseWithImageID, error) {
-    // Use the gobizfly client's NewRequest method to create the HTTP request
-    // Service name for Kubernetes Engine is "kubernetes"
-    // Path is "/k8s_versions" (from gobizfly source)
     serviceName := "kubernetes"
     path := "/k8s_versions"
 
@@ -696,7 +721,8 @@ func (m *Manager) getSmallestInstanceType(nodeClaim *karpenterv1.NodeClaim) (str
             "name", spec.Name,
             "cpu", spec.CPU,
             "ram", spec.RAM,
-            "tier", spec.Tier) // Include tier if you have it
+            "tier", spec.Tier,
+            "cpuVendor", spec.CPUVendor)
     }
 
     if len(parsedInstances) == 0 {
@@ -718,7 +744,8 @@ func (m *Manager) getSmallestInstanceType(nodeClaim *karpenterv1.NodeClaim) (str
             "rank", i+1,
             "name", spec.Name,
             "cpu", spec.CPU,
-            "ram", spec.RAM)
+            "ram", spec.RAM,
+            "cpuVendor", spec.CPUVendor)
     }
 
     smallestInstance := parsedInstances[0]
@@ -728,6 +755,7 @@ func (m *Manager) getSmallestInstanceType(nodeClaim *karpenterv1.NodeClaim) (str
         "instanceType", smallestInstance.Name,
         "cpu", smallestInstance.CPU,
         "ram", smallestInstance.RAM,
+        "cpuVendor", smallestInstance.CPUVendor,
         "totalCandidates", len(parsedInstances),
         "selectionCriteria", "lowest CPU, then lowest RAM")
 
@@ -737,51 +765,104 @@ func (m *Manager) getSmallestInstanceType(nodeClaim *karpenterv1.NodeClaim) (str
         m.Log.V(1).Info("Next smallest instance for comparison",
             "instanceType", nextSmallest.Name,
             "cpu", nextSmallest.CPU,
-            "ram", nextSmallest.RAM)
+            "ram", nextSmallest.RAM,
+            "cpuVendor", nextSmallest.CPUVendor)
     }
 
     return smallestInstance.Name, nil
 }
 
-// parseInstanceType parses instance type string format and extracts tier information
+// parseInstanceType parses new instance type format: p4a.2c_2g, p2.4c_8g
+// Format: <tier><gen><vendor>.<cpu>c_<ram>g
+// - tier: p (premium), b (basic), e (enterprise), d (dedicated)
+// - gen + vendor: "2" = Intel2, "4a" = AMD4
 func (m *Manager) parseInstanceType(instanceType string) (InstanceTypeSpec, error) {
-    var cpu, ram int
+    // New format must contain a dot: p4a.2c_2g
+    if !strings.Contains(instanceType, ".") {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format (expected format: p4a.2c_2g): %s", instanceType)
+    }
+
+    parts := strings.Split(instanceType, ".")
+    if len(parts) != 2 {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format (expected format: p4a.2c_2g): %s", instanceType)
+    }
+
+    prefix := parts[0]      // e.g., "p4a" or "b2"
+    cpuRamPart := parts[1]  // e.g., "2c_2g"
+
+    // Parse tier from first character
+    if len(prefix) < 2 {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid prefix format: %s", prefix)
+    }
+
+    tierChar := string(prefix[0])
     var tier string
-    var err error
-
-    // Handle different formats
-    if strings.HasPrefix(instanceType, "nix.") {
-        // Format: nix.2c_2g => premium
+    switch tierChar {
+    case "p":
         tier = "premium"
-        // Remove "nix." prefix and parse the rest
-        remaining := strings.TrimPrefix(instanceType, "nix.")
-        cpu, ram, err = m.parseCpuRam(remaining)
-        if err != nil {
-            return InstanceTypeSpec{}, fmt.Errorf("failed to parse nix format %s: %w", instanceType, err)
-        }
-    } else {
-        // Standard formats: 2c_2g_basic, 2c_2g_enterprise, 2c_2g_dedicated
-        parts := strings.Split(instanceType, "_")
-        if len(parts) < 3 {
-            return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format: %s", instanceType)
-        }
+    case "b":
+        tier = "basic"
+    case "e":
+        tier = "enterprise"
+    case "d":
+        tier = "dedicated"
+    default:
+        return InstanceTypeSpec{}, fmt.Errorf("unknown tier prefix: %s", tierChar)
+    }
 
-        // Parse CPU and RAM from first two parts
-        cpu, ram, err = m.parseCpuRam(strings.Join(parts[:2], "_"))
-        if err != nil {
-            return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", instanceType, err)
-        }
+    // Parse CPU vendor (combined vendor + generation)
+    cpuVendor := m.parseCPUVendor(instanceType)
 
-        // Extract tier from the last part
-        tier = parts[len(parts)-1]
+    // Parse CPU and RAM
+    cpu, ram, err := m.parseCpuRam(cpuRamPart)
+    if err != nil {
+        return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", cpuRamPart, err)
     }
 
     return InstanceTypeSpec{
-        Name: instanceType,
-        CPU:  cpu,
-        RAM:  ram,
-        Tier: tier, // Add this field to your struct
+        Name:      instanceType,
+        CPU:       cpu,
+        RAM:       ram,
+        Tier:      tier,
+        CPUVendor: cpuVendor,
     }, nil
+}
+
+// parseCPUVendor extracts CPU vendor with generation from instance type prefix
+// Examples:
+//   - "p4a.1c_1g" -> "AMD4"
+//   - "p2.1c_1g" -> "Intel2"
+func (m *Manager) parseCPUVendor(instanceType string) string {
+    if !strings.Contains(instanceType, ".") {
+        return ""
+    }
+
+    parts := strings.Split(instanceType, ".")
+    if len(parts) < 2 {
+        return ""
+    }
+
+    prefix := parts[0]
+    
+    // Remove tier prefix (first character: p, b, e, d)
+    if len(prefix) < 2 {
+        return ""
+    }
+    
+    genString := prefix[1:] // e.g., "4a" or "2"
+    
+    // Only handle Intel2 and AMD4
+    if genString == "4a" {
+        return "AMD4"
+    } else if genString == "2" {
+        return "Intel2"
+    }
+    
+    // Unknown or unsupported format
+    m.Log.V(1).Info("Unknown CPU vendor format", 
+        "instanceType", instanceType,
+        "genString", genString)
+    return ""
 }
 
 func (m *Manager) parseCpuRam(cpuRamStr string) (int, int, error) {
@@ -818,7 +899,6 @@ func getValueFromRequirements(reqs []karpenterv1.NodeSelectorRequirementWithMinV
     }
     return "", false
 }
-
 
 func (m *Manager) getRequirementKeys(reqs []karpenterv1.NodeSelectorRequirementWithMinValues) []string {
     keys := make([]string, len(reqs))

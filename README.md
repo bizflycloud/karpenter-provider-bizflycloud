@@ -145,7 +145,7 @@ spec:
       - key: karpenter.sh/capacity-type
         operator: In
         values:
-        - saving-plane
+        - subscrr
       - key: karpenter.bizflycloud.com/node-category
         operator: In
         values:
