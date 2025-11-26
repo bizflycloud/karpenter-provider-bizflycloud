@@ -65,6 +65,7 @@ type InstanceTypeSpec struct {
 	CPU  int
 	RAM  int
 	Tier string
+	CPUVendor string
 }
 
 
@@ -978,67 +979,111 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 
 // Add the parseInstanceType method if it doesn't exist
 func (p *cloudProviderImpl) parseInstanceType(instanceType string) (InstanceTypeSpec, error) {
-	var cpu, ram int
-	var tier string
-	var err error
+    // New format must contain a dot: p4a.2c_2g
+    if !strings.Contains(instanceType, ".") {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format (expected format: p4a.2c_2g): %s", instanceType)
+    }
 
-	if strings.HasPrefix(instanceType, "nix.") {
-		tier = "premium"
-		remaining := strings.TrimPrefix(instanceType, "nix.")
-		cpu, ram, err = p.parseCpuRam(remaining)
-		if err != nil {
-			return InstanceTypeSpec{}, fmt.Errorf("failed to parse nix format %s: %w", instanceType, err)
-		}
-	} else {
-		parts := strings.Split(instanceType, "_")
-		if len(parts) < 3 {
-			return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format: %s", instanceType)
-		}
+    parts := strings.Split(instanceType, ".")
+    if len(parts) != 2 {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid instance type format (expected format: p4a.2c_2g): %s", instanceType)
+    }
 
-		cpu, ram, err = p.parseCpuRam(strings.Join(parts[:2], "_"))
-		if err != nil {
-			return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", instanceType, err)
-		}
+    prefix := parts[0]      // e.g., "p4a" or "b2"
+    cpuRamPart := parts[1]  // e.g., "2c_2g"
 
-		tier = parts[len(parts)-1]
-	}
+    // Parse tier from first character
+    if len(prefix) < 2 {
+        return InstanceTypeSpec{}, fmt.Errorf("invalid prefix format: %s", prefix)
+    }
 
-	return InstanceTypeSpec{
-		Name: instanceType,
-		CPU:  cpu,
-		RAM:  ram,
-		Tier: tier,
-	}, nil
+    tierChar := string(prefix[0])
+    var tier string
+    switch tierChar {
+    case "p":
+        tier = "premium"
+    case "b":
+        tier = "basic"
+    case "e":
+        tier = "enterprise"
+    case "d":
+        tier = "dedicated"
+    default:
+        return InstanceTypeSpec{}, fmt.Errorf("unknown tier prefix: %s", tierChar)
+    }
+
+    // Parse CPU vendor (combined vendor + generation)
+    cpuVendor := p.parseCPUVendor(instanceType)
+
+    // Parse CPU and RAM
+    cpu, ram, err := p.parseCpuRam(cpuRamPart)
+    if err != nil {
+        return InstanceTypeSpec{}, fmt.Errorf("failed to parse CPU/RAM from %s: %w", cpuRamPart, err)
+    }
+
+    return InstanceTypeSpec{
+        Name:      instanceType,
+        CPU:       cpu,
+        RAM:       ram,
+        Tier:      tier,
+        CPUVendor: cpuVendor,
+    }, nil
+}
+
+func (p *cloudProviderImpl) parseCPUVendor(instanceType string) string {
+    if !strings.Contains(instanceType, ".") {
+        return ""
+    }
+
+    parts := strings.Split(instanceType, ".")
+    if len(parts) < 2 {
+        return ""
+    }
+
+    prefix := parts[0]
+    
+    // Remove tier prefix (first character: p, b, e, d)
+    if len(prefix) < 2 {
+        return ""
+    }
+    
+    genString := prefix[1:] // e.g., "4a" or "2"
+    
+    // Only handle Intel2 and AMD4
+    if genString == "4a" {
+        return "AMD4"
+    } else if genString == "2" {
+        return "Intel2"
+    }
+    
+    // Unknown or unsupported format
+    p.log.V(1).Info("Unknown CPU vendor format",  // FIX: changed m.Log to p.log
+        "instanceType", instanceType,
+        "genString", genString)
+    return ""
 }
 
 func (p *cloudProviderImpl) parseCpuRam(cpuRamStr string) (int, int, error) {
-	parts := strings.Split(cpuRamStr, "_")
-	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("invalid CPU/RAM format: %s", cpuRamStr)
-	}
-
-	cpuStr := strings.TrimSuffix(parts[0], "c")
-	cpu, err := strconv.Atoi(cpuStr)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse CPU from %s: %w", parts[0], err)
-	}
-
-	ramStr := strings.TrimSuffix(parts[1], "g")
-	ram, err := strconv.Atoi(ramStr)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to parse RAM from %s: %w", parts[1], err)
-	}
-
-	return cpu, ram, nil
-}
-
-func (p *cloudProviderImpl) getNodePoolFromOwnerRefs(nodeClaim *v1.NodeClaim) string {
-    for _, owner := range nodeClaim.OwnerReferences {
-        if owner.Kind == "NodePool" {
-            return owner.Name
-        }
+    parts := strings.Split(cpuRamStr, "_")
+    if len(parts) != 2 {
+        return 0, 0, fmt.Errorf("invalid CPU/RAM format: %s", cpuRamStr)
     }
-    return ""
+
+    // Parse CPU (remove 'c' suffix)
+    cpuStr := strings.TrimSuffix(parts[0], "c")
+    cpu, err := strconv.Atoi(cpuStr)
+    if err != nil {
+        return 0, 0, fmt.Errorf("failed to parse CPU from %s: %w", parts[0], err)
+    }
+
+    // Parse RAM (remove 'g' suffix)
+    ramStr := strings.TrimSuffix(parts[1], "g")
+    ram, err := strconv.Atoi(ramStr)
+    if err != nil {
+        return 0, 0, fmt.Errorf("failed to parse RAM from %s: %w", parts[1], err)
+    }
+
+    return cpu, ram, nil
 }
 
 // setLabelFromRequirements sets a label on the NodeClaim from the requirements if present, otherwise sets a default value
@@ -1054,4 +1099,14 @@ func (p *cloudProviderImpl) setLabelFromRequirements(nodeClaim *v1.NodeClaim, ke
     // Use default if not found in requirements
     nodeClaim.Labels[key] = defaultValue
     p.log.V(1).Info("Set label from default", "key", key, "value", defaultValue)
+}
+
+// getNodePoolFromOwnerRefs extracts the NodePool name from OwnerReferences
+func (p *cloudProviderImpl) getNodePoolFromOwnerRefs(nodeClaim *v1.NodeClaim) string {
+    for _, owner := range nodeClaim.OwnerReferences {
+        if owner.Kind == "NodePool" {
+            return owner.Name
+        }
+    }
+    return ""
 }
