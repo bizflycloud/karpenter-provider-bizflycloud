@@ -1,64 +1,207 @@
 apiVersion: karpenter.sh/v1
 kind: NodePool
 metadata:
+  name: default
   labels:
-    karpenter.bizflycloud.com/disk-type: HDD
-    topology.kubernetes.io/zone: HN1
-  name: default-2
+    karpenter.bizflycloud.com/disk-type: SSD
+    karpenter.bizflycloud.com/cpu-vendor: AMD4
+    topology.kubernetes.io/zone: HN2
 spec:
+  # Resource limits for this pool
+  limits:
+    cpu: "100"
+    memory: 200Gi
+  
   disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
     budgets:
     - nodes: "1"
       reasons:
       - Empty
       - Underutilized
-    consolidateAfter: 30s
-    consolidationPolicy: WhenEmptyOrUnderutilized
+  
   template:
     spec:
-      expireAfter: 720h
       nodeClassRef:
         group: karpenter.bizflycloud.com
         kind: BizflyCloudNodeClass
         name: default
+      
+      # Node expiration
+      expireAfter: 720h
+      
+      # Node requirements
       requirements:
+      # Architecture
       - key: kubernetes.io/arch
         operator: In
-        values:
-        - amd64
+        values: ["amd64"]
+      
+      # Capacity type
       - key: karpenter.sh/capacity-type
         operator: In
+        values: ["on-demand"]
+      
+      # Instance types (AMD4 Premium flavors only)
+      - key: node.kubernetes.io/instance-type
+        operator: In
         values:
-        - saving-plan
+        - p4a.2c_2g
+        - p4a.4c_8g
+        - p4a.8c_16g
+        - p4a.16c_32g
+      
+      # Node category (Premium tier)
       - key: karpenter.bizflycloud.com/node-category
         operator: In
-        values:
-        - enterprise
+        values: ["premium"]
+      
+      # CPU Vendor (AMD4 only)
+      - key: karpenter.bizflycloud.com/cpu-vendor
+        operator: In
+        values: ["AMD4"]
+      
+      # Disk type
       - key: karpenter.bizflycloud.com/disk-type
         operator: In
-        values:
-        - HDD
+        values: ["SSD"]
+      
+      # OS type
       - key: karpenter.bizflycloud.com/os-type
         operator: In
-        values:
-        - flatcar
+        values: ["ubuntu"]
+      
+      # Kubernetes version
+      - key: bizflycloud.com/kubernetes-version
+        operator: In
+        values: ["v1.32.1"]
+      
+      # Availability zone
       - key: topology.kubernetes.io/zone
         operator: In
-        values:
-        - HN1
+        values: ["HN2"]
+      
+      # Startup taints (prevent scheduling until node is ready)
       startupTaints:
-      - effect: NoExecute
-        key: karpenter.sh/unregistered
+      - key: karpenter.sh/unregistered
         value: "true"
-      - effect: NoSchedule
-        key: karpenter.sh/disrupted
-      - effect: NoSchedule
-        key: node.cloudprovider.kubernetes.io/uninitialized
+        effect: NoExecute
+      - key: karpenter.sh/disrupted
+        effect: NoSchedule
+      - key: node.cloudprovider.kubernetes.io/uninitialized
         value: "true"
-      - effect: NoSchedule
-        key: node.kubernetes.io/not-ready
-      - effect: NoExecute
-        key: node.kubernetes.io/not-ready
-      - effect: NoSchedule
-        key: node.cilium.io/agent-not-ready
+        effect: NoSchedule
+      - key: node.kubernetes.io/not-ready
+        effect: NoSchedule
+      - key: node.kubernetes.io/not-ready
+        effect: NoExecute
+      - key: node.cilium.io/agent-not-ready
+        effect: NoSchedule
+      
+      terminationGracePeriod: 30s
+
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default-2
+  labels:
+    karpenter.bizflycloud.com/disk-type: HDD
+    karpenter.bizflycloud.com/cpu-vendor: Intel2
+    topology.kubernetes.io/zone: HN1
+spec:
+  # Resource limits for this pool
+  limits:
+    cpu: "50"
+    memory: 100Gi
+  
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 30s
+    budgets:
+    - nodes: "1"
+      reasons:
+      - Empty
+      - Underutilized
+  
+  template:
+    spec:
+      nodeClassRef:
+        group: karpenter.bizflycloud.com
+        kind: BizflyCloudNodeClass
+        name: default
+      
+      # Node expiration
+      expireAfter: 720h
+      
+      # Node requirements
+      requirements:
+      # Architecture
+      - key: kubernetes.io/arch
+        operator: In
+        values: ["amd64"]
+      
+      # Capacity type
+      - key: karpenter.sh/capacity-type
+        operator: In
+        values: ["subscription "]
+      
+      # Instance types (Intel2 Enterprise/Basic flavors only)
+      - key: node.kubernetes.io/instance-type
+        operator: In
+        values:
+        - e2.2c_2g
+        - e2.4c_8g
+        - e2.8c_16g
+        - b2.2c_2g
+        - b2.4c_8g
+      
+      # Node category (Enterprise tier)
+      - key: karpenter.bizflycloud.com/node-category
+        operator: In
+        values: ["enterprise", "basic"]
+      
+      # CPU Vendor (Intel2 only)
+      - key: karpenter.bizflycloud.com/cpu-vendor
+        operator: In
+        values: ["Intel2"]
+      
+      # Disk type
+      - key: karpenter.bizflycloud.com/disk-type
+        operator: In
+        values: ["HDD"]
+      
+      # OS type
+      - key: karpenter.bizflycloud.com/os-type
+        operator: In
+        values: ["ubuntu"]
+      
+      # Kubernetes version
+      - key: bizflycloud.com/kubernetes-version
+        operator: In
+        values: ["v1.31.5"]
+      
+      # Availability zone
+      - key: topology.kubernetes.io/zone
+        operator: In
+        values: ["HN1"]
+      
+      # Startup taints (prevent scheduling until node is ready)
+      startupTaints:
+      - key: karpenter.sh/unregistered
+        value: "true"
+        effect: NoExecute
+      - key: karpenter.sh/disrupted
+        effect: NoSchedule
+      - key: node.cloudprovider.kubernetes.io/uninitialized
+        value: "true"
+        effect: NoSchedule
+      - key: node.kubernetes.io/not-ready
+        effect: NoSchedule
+      - key: node.kubernetes.io/not-ready
+        effect: NoExecute
+      - key: node.cilium.io/agent-not-ready
+        effect: NoSchedule
+      
       terminationGracePeriod: 30s
