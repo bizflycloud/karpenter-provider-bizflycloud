@@ -38,3 +38,8 @@ kubeconfig
 
 # Debug files
 __debug_bin
+
+# Local scratch & secrets
+scratch/
+*.kubeconfig
+secret.yaml
