@@ -1,0 +1,22 @@
+apiVersion: karpenter.bizflycloud.com/v1
+kind: BizflyCloudNodeClass
+metadata:
+  name: test-default
+spec:
+  region: HN
+  zones:
+    - HN1
+    - HN2
+  template: Ubuntu 24.04 LTS
+  diskTypes:
+    - HDD
+    - SSD
+  rootDiskSize: 40
+  vpcNetworkIds:
+    - net-test-id
+  networkPlans:
+    - free_datatransfer
+    - free_bandwidth
+  tags:
+    - karpenter-managed=true
+    - cluster-id=test-cluster
