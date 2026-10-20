@@ -1,0 +1,55 @@
+name: Update Addon Repo
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to update addon repo with"
+        required: true
+
+jobs:
+  update-addon:
+    name: Bump karpenter tag in bizflycloud-kubernetes-add-ons
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+
+      - name: Checkout addon repo
+        uses: actions/checkout@v4
+        with:
+          repository: bizflycloud/bizflycloud-kubernetes-add-ons
+          token: ${{ secrets.ADDON_REPO_PAT }}
+          path: addon-repo
+
+      - name: Bump image tag
+        working-directory: addon-repo
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          sed -i "s|^  tag:.*|  tag: ${TAG}|" karpenter/helm/values.yaml
+          if [ -f karpenter/INFORMATION.yaml ]; then
+            sed -i "s|^version:.*|version: ${TAG}|" karpenter/INFORMATION.yaml
+          fi
+
+      - name: Commit and push
+        working-directory: addon-repo
+        run: |
+          TAG="${{ steps.vars.outputs.tag }}"
+          git config user.email "ci-bot@bizflycloud.vn"
+          git config user.name "BKE CI Bot"
+          git checkout -b "chore/bump-karpenter-${TAG}"
+          git add karpenter/helm/values.yaml karpenter/INFORMATION.yaml 2>/dev/null || true
+          git diff --cached --quiet && echo "Nothing to commit" && exit 0
+          git commit -m "chore: bump karpenter image to ${TAG}"
+          git push origin "chore/bump-karpenter-${TAG}"
+          echo "Branch pushed. Create PR manually or via GitHub UI."
