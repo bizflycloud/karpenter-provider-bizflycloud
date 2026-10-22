@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/bizflycloud/gobizfly"
 	"github.com/go-logr/logr"
@@ -18,7 +20,7 @@ const (
 	EnvAppCredID     = "BIZFLY_CLOUD_APP_CRED_ID"
 	EnvAppCredSecret = "BIZFLY_CLOUD_APP_CRED_SECRET"
 	EnvAPIURL        = "BIZFLY_CLOUD_API_URL"
-	EnvProjectID      = "BIZFLY_CLOUD_PROJECT_ID"
+	EnvProjectID     = "BIZFLY_CLOUD_PROJECT_ID"
 
 	// Default values
 	DefaultRegion = "HN"
@@ -37,7 +39,7 @@ type Config struct {
 	AppCredID     string
 	AppCredSecret string
 	APIUrl        string
-	ProjectID      string
+	ProjectID     string
 	Region        string
 }
 
@@ -96,6 +98,8 @@ func NewBizflyClient(config *Config, log logr.Logger) (*gobizfly.Client, error) 
 		gobizfly.WithAPIURL(config.APIUrl),
 		gobizfly.WithProjectID(config.ProjectID),
 		gobizfly.WithRegionName(config.Region),
+		// The default http.Client has no timeout: a hung API call would stall provisioning/termination
+		gobizfly.WithHTTPClient(&http.Client{Timeout: 60 * time.Second}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BizflyCloud client: %w", err)
