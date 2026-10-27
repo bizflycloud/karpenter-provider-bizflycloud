@@ -585,8 +585,13 @@ func (m *Manager) getWorkerImageIDFromAPI(kubeVersion string, osType string) (st
             continue
         }
         
-        // Match major.minor (patch can be different)
+        // Match major.minor (patch can be different). A version without a worker
+        // image cannot launch a node, so it must not win the latest-patch pick.
         if cvSemver.Major == targetSemver.Major && cvSemver.Minor == targetSemver.Minor {
+            if cv.WorkerImageID == "" {
+                m.Log.Info("Skipping version without worker image", "k8sVersion", cv.K8SVersion)
+                continue
+            }
             candidates = append(candidates, cv)
             m.Log.Info("Added candidate version",
                 "k8sVersion", cv.K8SVersion,
