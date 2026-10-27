@@ -186,9 +186,16 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
         return nil, fmt.Errorf("nodeCategories must be specified in NodeClass")
     }
     
-    serverType, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, NodeCategoryLabel)
-    if !ok {
-        return nil, fmt.Errorf("node category not found in node claim requirements, ensure '%s' is specified in NodePool", NodeCategoryLabel)
+    // The flavor decides the server type. The node-category requirement lists every
+    // category the NodePool allows, so its first value can belong to another
+    // category than the chosen flavor and the API answers "Flavor not found".
+    serverType := serverTypeFromFlavor(instanceTypeName)
+    if serverType == "" {
+        var ok bool
+        serverType, ok = getValueFromRequirements(nodeClaim.Spec.Requirements, NodeCategoryLabel)
+        if !ok {
+            return nil, fmt.Errorf("node category not found in node claim requirements, ensure '%s' is specified in NodePool", NodeCategoryLabel)
+        }
     }
 
     networkPlan, ok := getValueFromRequirements(nodeClaim.Spec.Requirements, NetworkPlanLabel)
@@ -936,4 +943,24 @@ func (m *Manager) UpdateNodeClaimStatus(ctx context.Context, nodeClaim *karpente
         "imageID", imageID)
     
     return nil
+}
+
+// serverTypeFromFlavor maps the flavor prefix to its category:
+// p*=premium, b*=basic, e*=enterprise, d*=dedicated. It returns "" for an
+// unknown prefix.
+func serverTypeFromFlavor(flavor string) string {
+    if flavor == "" {
+        return ""
+    }
+    switch flavor[0] {
+    case 'p':
+        return "premium"
+    case 'b':
+        return "basic"
+    case 'e':
+        return "enterprise"
+    case 'd':
+        return "dedicated"
+    }
+    return ""
 }
