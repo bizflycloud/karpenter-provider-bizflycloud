@@ -29,6 +29,8 @@ import (
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instance"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instance/conversion"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype"
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/calculator"
+	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/parser"
 	"github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/utils"
 )
 
@@ -155,7 +157,7 @@ func (p *cloudProviderImpl) Create(ctx context.Context, nodeClaim *v1.NodeClaim)
 		"annotations", nodeClaim.Annotations)
 
 	// Extract instance type from NodeClaim requirements
-	instanceTypeName, err := p.getSmallestInstanceTypeFromRequirements(nodeClaim.Spec.Requirements)
+	instanceType, err := p.getSmallestInstanceTypeFromRequirements(nodeClaim.Spec.Requirements)
 	if err != nil {
 		return nil, &errors.NodeCreationError{
 			NodeName:   nodeClaim.Name,
@@ -163,6 +165,7 @@ func (p *cloudProviderImpl) Create(ctx context.Context, nodeClaim *v1.NodeClaim)
 			Retryable:  false,
 		}
 	}
+	instanceTypeName := instanceType.Name
 	// Set required labels
 	p.setRequiredLabels(nodeClaim, instanceTypeName)
 
@@ -180,7 +183,7 @@ func (p *cloudProviderImpl) Create(ctx context.Context, nodeClaim *v1.NodeClaim)
 	}
 
 	// Update NodeClaim status
-	p.updateNodeClaimStatus(nodeClaim, createdNode)
+	p.updateNodeClaimStatus(nodeClaim, createdNode, instanceType)
 
 	p.log.NodeCreation(nodeClaim.Name, instanceTypeName, p.zone, time.Since(start).String())
 
@@ -200,19 +203,20 @@ func (p *cloudProviderImpl) Delete(ctx context.Context, nodeClaim *v1.NodeClaim)
 		"finalizers", nodeClaim.Finalizers,
 		"deletionTimestamp", nodeClaim.DeletionTimestamp)
 
-	// Delete cloud resources first
-	if err := p.deleteCloudResources(ctx, nodeClaim); err != nil {
+	// Karpenter keeps calling Delete until it returns NodeClaimNotFoundError,
+	// which is what lets it drop the NodeClaim finalizer.
+	gone, err := p.deleteCloudResources(ctx, nodeClaim)
+	if err != nil {
 		return &errors.NodeDeletionError{
 			NodeName:   nodeClaim.Name,
 			Underlying: err,
 			Retryable:  errors.IsRetryableError(err),
 		}
 	}
-
-	// Handle stuck finalizers
-	p.handleStuckFinalizers(ctx, nodeClaim)
-
-	p.log.NodeDeletion(nodeClaim.Name, nodeClaim.Status.ProviderID, time.Since(start).String())
+	if gone {
+		p.log.NodeDeletion(nodeClaim.Name, nodeClaim.Status.ProviderID, time.Since(start).String())
+		return cloudprovider.NewNodeClaimNotFoundError(fmt.Errorf("instance for nodeclaim %s no longer exists", nodeClaim.Name))
+	}
 
 	return nil
 }
@@ -378,14 +382,22 @@ func (p *cloudProviderImpl) setRequiredLabels(nodeClaim *v1.NodeClaim, instanceT
 	nodeClaim.Labels[corev1.LabelArchStable] = "amd64"
 	nodeClaim.Labels[NodeLabelRegion] = p.region
 
+	// Category and CPU vendor describe the chosen flavor, so they must come
+	// from it: a NodePool usually allows several of each, and a value that does
+	// not match the flavor's offerings makes Karpenter see the NodeClaim as
+	// drifted (InstanceTypeNotFound) and fail to price it for consolidation.
+	flavorParser := parser.NewParser(p.log.Logger)
+	nodeClaim.Labels[instancetype.NodeCategoryLabel] = flavorParser.CategorizeFlavor(instanceTypeName)
+	if cpuVendor := flavorParser.ParseCPUVendor(instanceTypeName); cpuVendor != "" {
+		nodeClaim.Labels[instancetype.CPUVendorLabel] = cpuVendor
+	}
+
     // DYNAMIC: Get values from NodeClaim requirements instead of hardcoding
-    p.setLabelFromRequirements(nodeClaim, "karpenter.sh/capacity-type", "")
+    p.setLabelFromRequirements(nodeClaim, v1.CapacityTypeLabelKey, v1.CapacityTypeOnDemand)
     p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/disk-type", "")
-    p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/node-category", "")
     p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/bizflycloudnodeclass", "")
 	p.setLabelFromRequirements(nodeClaim, "karpenter.bizflycloud.com/os-type", "")
 	p.setLabelFromRequirements(nodeClaim, "bizflycloud.com/kubernetes-version", "")
-	p.setLabelFromRequirements(nodeClaim, "topology.kubernetes.io/zone", "")
 
     p.setLabelFromRequirements(nodeClaim, corev1.LabelTopologyZone, p.zone)
     
@@ -408,10 +420,16 @@ func (p *cloudProviderImpl) convertNodeClaimToNode(nodeClaim *v1.NodeClaim) *cor
 	}
 }
 
-func (p *cloudProviderImpl) updateNodeClaimStatus(nodeClaim *v1.NodeClaim, createdNode *corev1.Node) {
+// updateNodeClaimStatus reports the same capacity and allocatable the
+// instance type advertised. Until the Node registers, Karpenter packs pods
+// onto the in-flight NodeClaim using these values; reporting more than the
+// kubelet will allow makes those pods unschedulable once the Node appears,
+// and Karpenter then launches another NodeClaim for them.
+func (p *cloudProviderImpl) updateNodeClaimStatus(nodeClaim *v1.NodeClaim, createdNode *corev1.Node, instanceType InstanceTypeSpec) {
+	capacityCalculator := calculator.NewCapacityCalculator()
 	nodeClaim.Status.ProviderID = createdNode.Spec.ProviderID
-	nodeClaim.Status.Capacity = createdNode.Status.Capacity
-	nodeClaim.Status.Allocatable = createdNode.Status.Allocatable
+	nodeClaim.Status.Capacity = capacityCalculator.CreateCapacity(instanceType.CPU, instanceType.RAM*1024)
+	nodeClaim.Status.Allocatable = capacityCalculator.CreateAllocatable(instanceType.CPU, instanceType.RAM*1024)
 }
 
 func (p *cloudProviderImpl) convertNodeToNodeClaim(node *corev1.Node) *v1.NodeClaim {
@@ -427,52 +445,34 @@ func (p *cloudProviderImpl) convertNodeToNodeClaim(node *corev1.Node) *v1.NodeCl
 	}
 }
 
-func (p *cloudProviderImpl) deleteCloudResources(ctx context.Context, nodeClaim *v1.NodeClaim) error {
+// deleteCloudResources starts deleting the instance behind the NodeClaim and
+// reports whether the instance is already gone.
+func (p *cloudProviderImpl) deleteCloudResources(ctx context.Context, nodeClaim *v1.NodeClaim) (bool, error) {
 	providerID := nodeClaim.Status.ProviderID
 	if providerID == "" {
-		return nil
+		return true, nil
 	}
 
 	instanceID, err := utils.ExtractInstanceIDFromProviderID(providerID, ProviderIDPrefix)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	instanceProvider, err := p.createInstanceProvider()
 	if err != nil {
-		return fmt.Errorf("failed to create instance provider: %w", err)
+		return false, fmt.Errorf("failed to create instance provider: %w", err)
 	}
-	return instanceProvider.DeleteInstance(ctx, instanceID)	
-}
-
-func (p *cloudProviderImpl) handleStuckFinalizers(ctx context.Context, nodeClaim *v1.NodeClaim) {
-	if nodeClaim.DeletionTimestamp != nil &&
-		time.Since(nodeClaim.DeletionTimestamp.Time) > 5*time.Minute {
-
-		p.log.Info("NodeClaim has been terminating for too long, removing finalizers",
-			"name", nodeClaim.Name,
-			"terminatingFor", time.Since(nodeClaim.DeletionTimestamp.Time))
-
-		// Remove Karpenter finalizers
-		var newFinalizers []string
-		for _, finalizer := range nodeClaim.Finalizers {
-			if !strings.Contains(finalizer, "karpenter.sh") {
-				newFinalizers = append(newFinalizers, finalizer)
-			}
+	inst, err := instanceProvider.GetInstance(ctx, instanceID)
+	if err != nil {
+		if errors.IsNotFoundError(err) {
+			return true, nil
 		}
-
-		if len(newFinalizers) != len(nodeClaim.Finalizers) {
-			nodeClaim.Finalizers = newFinalizers
-			if err := p.kubeClient.Update(ctx, nodeClaim); err != nil {
-				p.log.ErrorWithDetails(err, "Failed to remove stuck finalizers",
-					"name", nodeClaim.Name)
-			} else {
-				p.log.Info("Removed stuck finalizers from NodeClaim",
-					"name", nodeClaim.Name,
-					"remainingFinalizers", len(newFinalizers))
-			}
-		}
+		return false, err
 	}
+	if inst.Status == "DELETED" {
+		return true, nil
+	}
+	return false, instanceProvider.DeleteInstance(ctx, instanceID)
 }
 
 func (p *cloudProviderImpl) createInstanceProvider() (*instance.Provider, error) {
@@ -901,7 +901,7 @@ func (p *cloudProviderImpl) newTerminatingNodeClassError(name string) *k8serrors
 	return err
 }
 
-func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements []v1.NodeSelectorRequirementWithMinValues) (string, error) {
+func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements []v1.NodeSelectorRequirementWithMinValues) (InstanceTypeSpec, error) {
 	var availableInstanceTypes []string
 	
 	// Extract all available instance types from requirements
@@ -917,7 +917,7 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 		"instanceTypes", availableInstanceTypes)
 
 	if len(availableInstanceTypes) == 0 {
-		return "", fmt.Errorf("no instance types found in requirements")
+		return InstanceTypeSpec{}, fmt.Errorf("no instance types found in requirements")
 	}
 
 	// Parse and sort instance types
@@ -945,7 +945,7 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 		"validCount", len(parsedInstances))
 
 	if len(parsedInstances) == 0 {
-		return "", fmt.Errorf("no valid instance types found after parsing")
+		return InstanceTypeSpec{}, fmt.Errorf("no valid instance types found after parsing")
 	}
 
 	// Sort by CPU first, then by RAM (ascending order)
@@ -974,7 +974,7 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 		"totalCandidates", len(parsedInstances),
 		"selectionCriteria", "lowest CPU, then lowest RAM")
 
-	return smallestInstance.Name, nil
+	return smallestInstance, nil
 }
 
 // Add the parseInstanceType method if it doesn't exist
@@ -1096,7 +1096,11 @@ func (p *cloudProviderImpl) setLabelFromRequirements(nodeClaim *v1.NodeClaim, ke
             return
         }
     }
-    // Use default if not found in requirements
+    // Use default if not found in requirements; an empty label value matches
+    // no offering, so leave the label unset instead
+    if defaultValue == "" {
+        return
+    }
     nodeClaim.Labels[key] = defaultValue
     p.log.V(1).Info("Set label from default", "key", key, "value", defaultValue)
 }
