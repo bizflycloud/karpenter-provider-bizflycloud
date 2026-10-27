@@ -11,6 +11,7 @@ import (
     "github.com/bizflycloud/karpenter-provider-bizflycloud/pkg/provider/instancetype/validator"
     "github.com/go-logr/logr"
     corev1 "k8s.io/api/core/v1"
+    karpv1 "sigs.k8s.io/karpenter/pkg/apis/v1"
     "sigs.k8s.io/karpenter/pkg/cloudprovider"
     "sigs.k8s.io/karpenter/pkg/scheduling"
 )
@@ -21,6 +22,15 @@ const (
     OSTypeLabel       = "karpenter.bizflycloud.com/os-type"
     CPUVendorLabel    = "karpenter.bizflycloud.com/cpu-vendor"
 )
+
+func init() {
+    // Offerings carry these labels. Karpenter checks offerings against
+    // requirements that only name the capacity type (WorstLaunchPrice, used to
+    // find a cheaper replacement during consolidation) and treats a label it
+    // does not know as unmet, so without this every offering is priced as
+    // infinite and nodes are never replaced by cheaper ones.
+    karpv1.WellKnownLabels = karpv1.WellKnownLabels.Insert(NodeCategoryLabel, DiskTypeLabel, CPUVendorLabel)
+}
 
 type Provider interface {
     List(context.Context, *v1.BizflyCloudNodeClass) ([]*cloudprovider.InstanceType, error)

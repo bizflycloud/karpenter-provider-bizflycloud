@@ -83,6 +83,19 @@ func TestSetRequiredLabelsFollowTheFlavor(t *testing.T) {
 	}
 }
 
+// Consolidation only replaces a node with instance types whose
+// WorstLaunchPrice is below the node's price. That price is looked up with
+// requirements that carry nothing but the capacity type, so offering labels
+// Karpenter does not know as well-known make every price infinite.
+func TestOfferingsHaveALaunchPrice(t *testing.T) {
+	offering := offeringFor("basic", "Intel2")
+	offering.Price = 0.1
+	reqs := scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaimFromDefaultNodePool().Spec.Requirements...)
+	if got := (cloudprovider.Offerings{offering}).WorstLaunchPrice(reqs); got != offering.Price {
+		t.Fatalf("WorstLaunchPrice() = %v, want %v", got, offering.Price)
+	}
+}
+
 func TestDeleteWithoutInstanceReportsNotFound(t *testing.T) {
 	err := newTestProvider().Delete(context.Background(), &v1.NodeClaim{})
 	if !cloudprovider.IsNodeClaimNotFoundError(err) {
