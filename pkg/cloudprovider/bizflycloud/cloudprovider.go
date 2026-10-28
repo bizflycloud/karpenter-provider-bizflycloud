@@ -134,7 +134,7 @@ func (p *cloudProviderImpl) GetInstanceTypes(ctx context.Context, nodePool *v1.N
 		return nil, err
 	}
 
-	p.log.Info("Successfully retrieved instance types",
+	p.log.V(1).Info("Successfully retrieved instance types",
 		"count", len(instanceTypes),
 		"nodeClass", nodeClass.Name,
 		"nodePool", nodePool.Name)

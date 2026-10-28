@@ -96,10 +96,10 @@ func (p *Parser) CategorizeFlavor(flavorName string) string {
     case "d":
         category = "dedicated"
     default:
-        p.log.V(1).Info("Unknown tier prefix, defaulting to premium", 
+        p.log.V(1).Info("Unknown tier prefix, excluding flavor",
             "flavorName", flavorName,
             "tierChar", tierChar)
-        category = "premium" // Default category
+        return ""
     }
 
     p.log.V(2).Info("Flavor categorized", 
