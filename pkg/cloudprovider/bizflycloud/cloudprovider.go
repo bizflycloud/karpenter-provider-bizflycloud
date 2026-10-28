@@ -755,10 +755,17 @@ func (p *cloudProviderImpl) GetSpotInstances(ctx context.Context) (bool, error) 
 	return true, nil
 }
 
+// nodeClassLabel is the label Karpenter puts on every NodeClaim with the name
+// of the NodeClass its NodePool references.
+var nodeClassLabel = v1.NodeClassLabelKey(schema.GroupKind{Group: v1bizfly.GroupName, Kind: "BizflyCloudNodeClass"})
+
 func (p *cloudProviderImpl) resolveNodeClassFromNodeSpec(ctx context.Context, nodeSpec *corev1.Node) (*v1bizfly.BizflyCloudNodeClass, error) {
-	// For now, use the default NodeClass
+	name := nodeSpec.Labels[nodeClassLabel]
+	if name == "" {
+		name = "default"
+	}
 	nodeClass := &v1bizfly.BizflyCloudNodeClass{}
-	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: "default"}, nodeClass); err != nil {
+	if err := p.kubeClient.Get(ctx, types.NamespacedName{Name: name}, nodeClass); err != nil {
 		return nil, err
 	}
 	return nodeClass, nil
