@@ -58,8 +58,9 @@ const (
 	DriftReasonNodeClassDrifted = "NodeClassDrifted"
 	DriftReasonInstanceNotFound = "InstanceNotFound"
 
-	// Throttling
-	minCreationInterval = 300 * time.Second
+	// Throttling: space out server create calls to the BizFly API. Created
+	// servers are matched by NodeClaim name, so creates may overlap.
+	minCreationInterval = 10 * time.Second
 )
 
 type InstanceTypeSpec struct {

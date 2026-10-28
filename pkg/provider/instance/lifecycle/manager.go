@@ -278,20 +278,33 @@ func (m *Manager) CreateInstance(ctx context.Context, nodeClaim *karpenterv1.Nod
         Firewalls:   []string{},
     }
 
-    // Create the server
-    response, err := m.BizflyClient.CloudServer.Create(ctx, opts)
-    if err != nil {
-        m.Log.Error(err, "Failed to create instance", "name", nodeName)
-        return nil, fmt.Errorf("failed to create server: %w", err)
+    // Karpenter retries Create for the same NodeClaim when an attempt fails
+    // after the server request went out; reuse that server instead of
+    // creating a second one.
+    var serverID string
+    if servers, err := m.BizflyClient.CloudServer.List(ctx, &gobizfly.ServerListOptions{}); err == nil {
+        if server := findClusterServer(servers, nodeName, os.Getenv("BKE_CLUSTER_ID")); server != nil {
+            m.Log.Info("Reusing server of an earlier attempt", "name", nodeName, "serverID", server.ID, "status", server.Status)
+            serverID = server.ID
+        }
     }
 
-    taskID := response.Task[0]
-    m.Log.Info("Server creation initiated", "name", nodeName, "taskID", taskID)
+    if serverID == "" {
+        // Create the server
+        response, err := m.BizflyClient.CloudServer.Create(ctx, opts)
+        if err != nil {
+            m.Log.Error(err, "Failed to create instance", "name", nodeName)
+            return nil, fmt.Errorf("failed to create server: %w", err)
+        }
 
-    // Wait for server to be created and get the actual server ID
-    serverID, err := m.waitForServerCreation(ctx, taskID)
-    if err != nil {
-        return nil, fmt.Errorf("failed to wait for server creation: %w", err)
+        taskID := response.Task[0]
+        m.Log.Info("Server creation initiated", "name", nodeName, "taskID", taskID)
+
+        // Wait for server to be created and get the actual server ID
+        serverID, err = m.waitForServerCreation(ctx, taskID, nodeName)
+        if err != nil {
+            return nil, fmt.Errorf("failed to wait for server creation: %w", err)
+        }
     }
 
     // Get the actual server details
@@ -429,8 +442,26 @@ func (m *Manager) buildMetadata(nodeClass *v1bizfly.BizflyCloudNodeClass, networ
     return metadata
 }
 
-// waitForServerCreation waits for server creation task to complete and returns server ID
-func (m *Manager) waitForServerCreation(ctx context.Context, taskID string) (string, error) {
+// findClusterServer returns the server this cluster's Karpenter created for
+// the NodeClaim nodeName. NodeClaim names are unique within a cluster, but the
+// project can hold Karpenter servers of other clusters. Failed or deleted
+// servers of earlier attempts are skipped.
+func findClusterServer(servers []*gobizfly.Server, nodeName string, clusterID string) *gobizfly.Server {
+    for _, server := range servers {
+        if server.Name == nodeName &&
+            server.Metadata["karpenter-managed"] == "true" &&
+            server.Metadata["bke_cluster_id"] == clusterID &&
+            server.Status != "ERROR" && server.Status != "DELETED" {
+            return server
+        }
+    }
+    return nil
+}
+
+// waitForServerCreation waits for the server of the NodeClaim nodeName to show
+// up and returns its ID
+func (m *Manager) waitForServerCreation(ctx context.Context, taskID string, nodeName string) (string, error) {
+    clusterID := os.Getenv("BKE_CLUSTER_ID")
     timeout := time.After(maxServerWaitTime)
     ticker := time.NewTicker(pollInterval)
     defer ticker.Stop()
@@ -446,24 +477,12 @@ func (m *Manager) waitForServerCreation(ctx context.Context, taskID string) (str
                 continue
             }
 
-            // Look for a server with our task ID in metadata or created recently
-            for _, server := range servers {
-                if server.Metadata != nil {
-                    if karpenterManaged, exists := server.Metadata["karpenter-managed"]; exists && karpenterManaged == "true" {
-                        // Check if this server was created recently (within last 5 minutes)
-                        if server.CreatedAt != "" {
-                            if createdTime, err := time.Parse("2006-01-02T15:04:05Z", server.CreatedAt); err == nil {
-                                if time.Since(createdTime) < 5*time.Minute {
-                                    m.Log.Info("Found server created by Karpenter",
-                                        "serverID", server.ID,
-                                        "taskID", taskID,
-                                        "createdAt", server.CreatedAt)
-                                    return server.ID, nil
-                                }
-                            }
-                        }
-                    }
-                }
+            if server := findClusterServer(servers, nodeName, clusterID); server != nil {
+                m.Log.Info("Found server created by Karpenter",
+                    "serverID", server.ID,
+                    "taskID", taskID,
+                    "name", nodeName)
+                return server.ID, nil
             }
 
             m.Log.V(1).Info("Server not found yet, continuing to wait", "taskID", taskID)
