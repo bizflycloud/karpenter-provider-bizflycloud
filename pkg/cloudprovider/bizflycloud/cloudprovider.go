@@ -956,12 +956,11 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 		return InstanceTypeSpec{}, fmt.Errorf("no valid instance types found after parsing")
 	}
 
-	// Sort by CPU first, then by RAM (ascending order)
+	// Cheapest first, as Karpenter priced the offerings (see calculator.LaunchPrice)
+	pricing := calculator.NewPricingCalculator()
 	sort.Slice(parsedInstances, func(i, j int) bool {
-		if parsedInstances[i].CPU == parsedInstances[j].CPU {
-			return parsedInstances[i].RAM < parsedInstances[j].RAM
-		}
-		return parsedInstances[i].CPU < parsedInstances[j].CPU
+		a, b := parsedInstances[i], parsedInstances[j]
+		return pricing.CheaperFirst(a.Name, a.Tier, a.CPU, a.RAM, b.Name, b.Tier, b.CPU, b.RAM)
 	})
 
 	p.log.Info("Sorted instance types (smallest to largest)")
@@ -980,7 +979,7 @@ func (p *cloudProviderImpl) getSmallestInstanceTypeFromRequirements(requirements
 		"cpu", smallestInstance.CPU,
 		"ram", smallestInstance.RAM,
 		"totalCandidates", len(parsedInstances),
-		"selectionCriteria", "lowest CPU, then lowest RAM")
+		"selectionCriteria", "lowest price, then lowest CPU, then lowest RAM")
 
 	return smallestInstance, nil
 }

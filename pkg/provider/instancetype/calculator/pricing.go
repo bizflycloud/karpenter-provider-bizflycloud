@@ -15,6 +15,28 @@ func (p *PricingCalculator) CalculateBasePrice(vcpus int, ramMB int) float64 {
 	return cpuCost + memoryCost
 }
 
+// LaunchPrice is the on-demand price a flavor's offering is given (instancetype.go).
+// Create must launch the cheapest candidate by this same price: Karpenter assumes
+// it did, and consolidation replaces any pricier node right after it initializes.
+func (p *PricingCalculator) LaunchPrice(category string, vcpus, ramGB int) float64 {
+	return p.CalculateCategoryPrice(p.CalculateBasePrice(vcpus, ramGB*1024), category, "on-demand")
+}
+
+// CheaperFirst orders flavors by LaunchPrice, then CPU, RAM and name, so the
+// first one is what Karpenter expects to be launched.
+func (p *PricingCalculator) CheaperFirst(aName, aCategory string, aCPU, aRAM int, bName, bCategory string, bCPU, bRAM int) bool {
+	if pa, pb := p.LaunchPrice(aCategory, aCPU, aRAM), p.LaunchPrice(bCategory, bCPU, bRAM); pa != pb {
+		return pa < pb
+	}
+	if aCPU != bCPU {
+		return aCPU < bCPU
+	}
+	if aRAM != bRAM {
+		return aRAM < bRAM
+	}
+	return aName < bName
+}
+
 // CalculateCategoryPrice adjusts price based on category and capacity type
 func (p *PricingCalculator) CalculateCategoryPrice(basePrice float64, category, capacityType string) float64 {
 	// Adjust price based on category
