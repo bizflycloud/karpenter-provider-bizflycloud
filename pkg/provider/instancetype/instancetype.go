@@ -156,8 +156,8 @@ func (d *defaultProvider) createOfferings(flavor *validator.FlavorResponse, node
     for _, zone := range availableZones {
         for _, diskType := range availableDiskTypes {
             // Calculate price
-            basePrice := d.pricing.CalculateBasePrice(flavor.VCPUs, flavor.RAM)
-            price := d.pricing.CalculateCategoryPrice(basePrice, category, "on-demand")
+            price := d.pricing.CalculatePrice(flavor.VCPUs, flavor.RAM, category, cpuVendor) +
+                d.pricing.CalculateDiskPrice(nodeClass.Spec.RootDiskSize, diskType, category)
 
             // Create offering requirements
             offeringReqs := []*scheduling.Requirement{
