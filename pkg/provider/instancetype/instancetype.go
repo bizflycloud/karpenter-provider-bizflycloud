@@ -74,6 +74,11 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
         
         // Parse category from flavor name (e.g., p4a -> premium, b2 -> basic)
         category := d.parser.CategorizeFlavor(gobizflyFlavor.Name)
+        // Create can only launch the premium, basic, enterprise and
+        // dedicated tiers; never offer VPS or unknown flavors (e.g. v2.*).
+        if category == "" || category == "vps" {
+            continue
+        }
 
         flavor := &validator.FlavorResponse{
             ID:       gobizflyFlavor.ID,
@@ -143,7 +148,7 @@ func (d *defaultProvider) List(ctx context.Context, nodeClass *v1.BizflyCloudNod
         instanceTypes = append(instanceTypes, instanceType)
     }
 
-    d.log.Info("Successfully created instance types",
+    d.log.V(1).Info("Successfully created instance types",
         "total", len(instanceTypes),
         "nodeClass", nodeClass.Name)
 
