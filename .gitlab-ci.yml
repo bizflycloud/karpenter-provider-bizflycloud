@@ -4,7 +4,7 @@ stages:
   - update-addon
 
 variables:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.26.11"
   REGISTRY: cr-hn-1.bizflycloud.vn/31ff9581861a4d0ea4df5e7dda0f665d
   IMAGE_NAME: karpenter-provider-bizflycloud
   ADDON_REPO: git@gitlab.bizflycloud.vn:bke/bizflycloud-kubernetes-add-ons.git

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26.11-alpine3.24 AS builder
 
 ENV GOTOOLCHAIN=auto
 
@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -a -o karpenter-provider-bizflycloud ./cmd/controller
 
 # Runtime stage
-FROM alpine:3.18
+FROM alpine:3.24
 
 # Add certificates and non-root user
 RUN apk add --no-cache ca-certificates tzdata && \
