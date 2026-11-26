@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-11-26 — Nâng cấp bảo mật
+
+- Build bằng Go 1.26.11 (`golang:1.26.11-alpine3.24`, `toolchain go1.26.11`; CI `GO_VERSION` 1.22 → 1.26.11). Go 1.24.2 hết hỗ trợ; govulncheck báo 47 lỗ stdlib có đường gọi thật.
+- Image runtime `alpine:3.18` (hết hỗ trợ 05/2025) → `alpine:3.24`.
+- `golang.org/x/net` 0.37.0 → 0.63.0 (CVE-2026-78660, CVE-2026-78669: HTTP/2), `x/text` → 0.44.0, `x/oauth2` → 0.38.0 (CVE-2025-22868), `x/crypto` → 0.59.0.
+- Sau khi nâng: govulncheck không còn lỗ có đường gọi.
+
 ## 2026-10-18 — Karpenter BizflyCloud Fixes
 
 ### Critical Bugs Fixed
